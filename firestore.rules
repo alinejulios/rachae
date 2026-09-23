@@ -1,0 +1,172 @@
+rules_version = '2';
+
+// Rachaê — regras de segurança do Firestore
+// ------------------------------------------
+// No plano Spark não há Cloud Functions: TODA a proteção dos dados está aqui.
+//
+// Modelo:
+//   users/{uid}                          → { householdId }          (só o próprio usuário)
+//   convites/{codigo}                    → { householdId, ativo }   (quem sabe o código consegue ler)
+//   households/{hid}                     → casa: nome, dono, listas (categorias etc.)
+//   households/{hid}/membros/{uid}       → { nome, email, convite, entrouEm }
+//   households/{hid}/grupos/{gid}        → { nome, tipo, todos, membros[] }
+//   households/{hid}/despesas/{id}
+//   households/{hid}/compras/{id}
+//   households/{hid}/pagamentos/{id}
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function casa(hid) { return /databases/$(database)/documents/households/$(hid); }
+    function isMember(hid) { return signedIn() && exists(/databases/$(database)/documents/households/$(hid)/membros/$(uid())); }
+    function isOwner(hid) { return signedIn() && get(casa(hid)).data.ownerUid == uid(); }
+    function memberExists(hid, id) { return exists(/databases/$(database)/documents/households/$(hid)/membros/$(id)); }
+
+    function str(v, min, max) { return v is string && v.size() >= min && v.size() <= max; }
+    function dataISO(v) { return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'); }
+    function centavos(v) { return v is int && v > 0 && v <= 100000000; }
+    function metodoOk(v) { return v in ['Igual', 'Porcentagem', 'Valor customizado']; }
+    function participantesOk(v) { return v is list && v.size() >= 1 && v.size() <= 20; }
+    function divisaoOk(v) { return v == null || (v is map && v.size() <= 20); }
+
+    // ---------------------------------------------------------------- perfil
+    match /users/{userId} {
+      allow read, delete: if signedIn() && uid() == userId;
+      allow create, update: if signedIn() && uid() == userId
+        && request.resource.data.keys().hasOnly(['householdId'])
+        && str(request.resource.data.householdId, 1, 40);
+    }
+
+    // ---------------------------------------------------------------- convites
+    // O código (ID do documento) é o segredo: dá para LER um convite sabendo o
+    // código, mas nunca LISTAR os convites.
+    match /convites/{codigo} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if isOwner(request.resource.data.householdId)
+        && request.resource.data.keys().hasOnly(['householdId', 'ativo', 'criadoEm'])
+        && request.resource.data.ativo is bool
+        && codigo.size() >= 8;
+      allow update, delete: if isOwner(resource.data.householdId);
+    }
+
+    // ---------------------------------------------------------------- casa
+    match /households/{hid} {
+      allow read: if isMember(hid);
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid()
+        && request.resource.data.keys().hasOnly(['nome', 'ownerUid', 'categorias', 'segmentos', 'criadoEm'])
+        && str(request.resource.data.nome, 1, 40)
+        && request.resource.data.categorias is list && request.resource.data.categorias.size() <= 30
+        && request.resource.data.segmentos is list && request.resource.data.segmentos.size() <= 10;
+      // Só o dono muda nome/listas; o dono nunca muda
+      allow update: if isOwner(hid)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nome', 'categorias', 'segmentos'])
+        && str(request.resource.data.nome, 1, 40)
+        && request.resource.data.categorias is list && request.resource.data.categorias.size() <= 30
+        && request.resource.data.segmentos is list && request.resource.data.segmentos.size() <= 10;
+      allow delete: if false;
+
+      // -------------------------------------------------------------- membros
+      match /membros/{memberId} {
+        allow read: if isMember(hid);
+        // Entrar na casa: o próprio usuário cria seu registro, apresentando um
+        // convite ativo desta casa — ou sendo o dono (no mesmo lote que cria a casa).
+        allow create: if signedIn() && uid() == memberId
+          && request.resource.data.keys().hasOnly(['nome', 'email', 'convite', 'entrouEm'])
+          && str(request.resource.data.nome, 1, 20)
+          && str(request.resource.data.email, 3, 120)
+          && (
+            getAfter(casa(hid)).data.ownerUid == uid()
+            || (
+              str(request.resource.data.convite, 8, 40)
+              && exists(/databases/$(database)/documents/convites/$(request.resource.data.convite))
+              && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.householdId == hid
+              && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.ativo == true
+            )
+          );
+        // Cada um só troca o próprio nome
+        allow update: if signedIn() && uid() == memberId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nome'])
+          && str(request.resource.data.nome, 1, 20);
+        // Sair da casa (a própria pessoa) ou ser removida pelo dono
+        allow delete: if signedIn() && (uid() == memberId || isOwner(hid)) && memberId != get(casa(hid)).data.ownerUid;
+      }
+
+      // -------------------------------------------------------------- grupos
+      match /grupos/{gid} {
+        allow read: if isMember(hid);
+        function grupoOk() {
+          return request.resource.data.keys().hasOnly(['nome', 'tipo', 'todos', 'membros', 'criadoPor'])
+            && str(request.resource.data.nome, 1, 30)
+            && request.resource.data.tipo in ['Compartilhado', 'Pessoal']
+            && request.resource.data.todos is bool
+            && request.resource.data.membros is list && request.resource.data.membros.size() <= 20;
+        }
+        allow create: if isMember(hid) && grupoOk() && request.resource.data.criadoPor == uid();
+        allow update: if isMember(hid) && grupoOk()
+          && request.resource.data.criadoPor == resource.data.criadoPor
+          && (isOwner(hid) || resource.data.criadoPor == uid());
+        allow delete: if isOwner(hid) || (isMember(hid) && resource.data.criadoPor == uid());
+      }
+
+      // -------------------------------------------------------------- despesas
+      match /despesas/{id} {
+        allow read: if isMember(hid);
+        allow create: if isMember(hid)
+          && request.resource.data.keys().hasOnly(['data', 'descricao', 'categoria', 'segmento', 'grupoId',
+               'valor', 'pagoPor', 'metodo', 'participantes', 'divisao', 'criadoPor', 'criadoEm'])
+          && request.resource.data.criadoPor == uid()
+          && dataISO(request.resource.data.data)
+          && str(request.resource.data.descricao, 1, 80)
+          && str(request.resource.data.categoria, 1, 40)
+          && str(request.resource.data.segmento, 1, 40)
+          && exists(/databases/$(database)/documents/households/$(hid)/grupos/$(request.resource.data.grupoId))
+          && centavos(request.resource.data.valor)
+          && memberExists(hid, request.resource.data.pagoPor)
+          && metodoOk(request.resource.data.metodo)
+          && participantesOk(request.resource.data.participantes)
+          && divisaoOk(request.resource.data.divisao);
+        allow update: if false;
+        allow delete: if isOwner(hid) || (isMember(hid) && resource.data.criadoPor == uid());
+      }
+
+      // -------------------------------------------------------------- compras parceladas
+      match /compras/{id} {
+        allow read: if isMember(hid);
+        allow create: if isMember(hid)
+          && request.resource.data.keys().hasOnly(['data', 'descricao', 'categoria', 'grupoId', 'valor',
+               'comprador', 'nParcelas', 'metodo', 'participantes', 'divisao', 'criadoPor', 'criadoEm'])
+          && request.resource.data.criadoPor == uid()
+          && dataISO(request.resource.data.data)
+          && str(request.resource.data.descricao, 1, 80)
+          && str(request.resource.data.categoria, 1, 40)
+          && exists(/databases/$(database)/documents/households/$(hid)/grupos/$(request.resource.data.grupoId))
+          && centavos(request.resource.data.valor)
+          && memberExists(hid, request.resource.data.comprador)
+          && request.resource.data.nParcelas is int && request.resource.data.nParcelas >= 1 && request.resource.data.nParcelas <= 60
+          && metodoOk(request.resource.data.metodo)
+          && participantesOk(request.resource.data.participantes)
+          && divisaoOk(request.resource.data.divisao);
+        allow update: if false;
+        allow delete: if isOwner(hid) || (isMember(hid) && resource.data.criadoPor == uid());
+      }
+
+      // -------------------------------------------------------------- pagamentos de parcela
+      match /pagamentos/{id} {
+        allow read: if isMember(hid);
+        // Só dá para registrar pagamento em nome próprio
+        allow create: if isMember(hid)
+          && request.resource.data.keys().hasOnly(['data', 'compraId', 'pessoa', 'valor', 'criadoEm'])
+          && request.resource.data.pessoa == uid()
+          && dataISO(request.resource.data.data)
+          && exists(/databases/$(database)/documents/households/$(hid)/compras/$(request.resource.data.compraId))
+          && centavos(request.resource.data.valor);
+        allow update: if false;
+        allow delete: if isOwner(hid) || (isMember(hid) && resource.data.pessoa == uid());
+      }
+    }
+  }
+}

@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
-<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://www.gstatic.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebaseinstallations.googleapis.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Rachaê</title>
 <meta name="description" content="Divisão de contas de casa">
 
@@ -40,52 +40,79 @@
 
     <div id="login-step-loading"><div class="spinner">Carregando...</div></div>
 
-    <form id="login-step-email" class="hidden" novalidate>
-      <p>Digite seu email para receber um código de acesso.</p>
-      <label for="login-email" class="visually-hidden">Email</label>
-      <input type="email" id="login-email" placeholder="seuemail@exemplo.com"
-             autocomplete="email" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="send">
-      <button class="primary" type="submit">Enviar código</button>
-      <p class="hint" id="login-email-hint" role="status"></p>
-      <div class="login-links hidden" id="cadastro-link">
-        <button type="button" class="link-btn" data-action="irParaCadastro">Primeiro acesso? Cadastre-se</button>
+    <!-- Entrar -->
+    <form id="form-entrar" class="login-step hidden" novalidate>
+      <p>Entre com seu email e senha.</p>
+      <label for="entrar-email" class="field-label">Email</label>
+      <input type="email" id="entrar-email" placeholder="seuemail@exemplo.com" autocomplete="username"
+             autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="next">
+      <label for="entrar-senha" class="field-label">Senha</label>
+      <input type="password" id="entrar-senha" autocomplete="current-password" enterkeyhint="go">
+      <button class="primary" type="submit">Entrar</button>
+      <p class="hint" id="entrar-hint" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="irPara" data-step="form-conta">Criar conta</button>
+        <button type="button" class="link-btn" data-action="irPara" data-step="form-senha">Esqueci a senha</button>
       </div>
     </form>
 
-    <form id="login-step-cadastro" class="hidden" novalidate>
-      <p>Crie seu acesso com o código de convite que você recebeu.</p>
-      <label for="cad-nome" class="field-label">Seu nome (como vai aparecer para a casa)</label>
-      <input type="text" id="cad-nome" maxlength="20" placeholder="Ex.: Aline"
+    <!-- Criar conta -->
+    <form id="form-conta" class="login-step hidden" novalidate>
+      <p>Crie sua conta. Depois você entra na casa com o código de convite.</p>
+      <label for="conta-nome" class="field-label">Seu nome (como vai aparecer para a casa)</label>
+      <input type="text" id="conta-nome" maxlength="20" placeholder="Ex.: Aline"
              autocomplete="given-name" autocapitalize="words" enterkeyhint="next">
-      <label for="cad-email" class="field-label">Email</label>
-      <input type="email" id="cad-email" placeholder="seuemail@exemplo.com"
-             autocomplete="email" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="next">
-      <label for="cad-convite" class="field-label">Código de convite</label>
-      <input type="text" id="cad-convite" placeholder="ABCD2345" maxlength="20"
-             autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="send">
-      <button class="primary" type="submit">Enviar código de confirmação</button>
-      <p class="hint" id="cad-hint" role="status"></p>
+      <label for="conta-email" class="field-label">Email</label>
+      <input type="email" id="conta-email" placeholder="seuemail@exemplo.com" autocomplete="username"
+             autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="next">
+      <label for="conta-senha" class="field-label">Senha (mínimo 8 caracteres)</label>
+      <input type="password" id="conta-senha" autocomplete="new-password" minlength="8" enterkeyhint="next">
+      <label for="conta-convite" class="field-label">Código de convite <span class="opcional">(se você recebeu um)</span></label>
+      <input type="text" id="conta-convite" placeholder="ABCD234567" maxlength="20"
+             autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="go">
+      <button class="primary" type="submit">Criar conta</button>
+      <p class="hint" id="conta-hint" role="status"></p>
       <div class="login-links">
-        <button type="button" class="link-btn" data-action="voltarParaEmail">Já tenho cadastro</button>
+        <button type="button" class="link-btn" data-action="irPara" data-step="form-entrar">Já tenho conta</button>
       </div>
     </form>
 
-    <form id="login-step-code" class="hidden" novalidate>
-      <p>Digite o código de 6 dígitos enviado para <strong id="login-email-shown"></strong>.</p>
-      <label for="login-codigo" class="visually-hidden">Código</label>
-      <input type="text" id="login-codigo" placeholder="000000" maxlength="6"
-             inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="done">
-      <button class="primary" type="submit">Confirmar código</button>
+    <!-- Esqueci a senha -->
+    <form id="form-senha" class="login-step hidden" novalidate>
+      <p>Enviamos um link para você criar uma senha nova.</p>
+      <label for="senha-email" class="field-label">Email</label>
+      <input type="email" id="senha-email" placeholder="seuemail@exemplo.com" autocomplete="username"
+             autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="send">
+      <button class="primary" type="submit">Enviar link</button>
+      <p class="hint" id="senha-hint" role="status"></p>
       <div class="login-links">
-        <button type="button" class="link-btn" data-action="voltarParaEmail">Trocar email</button>
-        <button type="button" class="link-btn" id="resend-btn" data-action="reenviarCodigo">Reenviar código</button>
+        <button type="button" class="link-btn" data-action="irPara" data-step="form-entrar">Voltar</button>
       </div>
-      <p class="hint" id="login-codigo-hint" role="status"></p>
     </form>
 
-    <div id="login-step-nomes" class="hidden">
-      <p>Quem é você?</p>
-      <div id="name-grid" class="name-grid"></div>
+    <!-- Logado, mas ainda sem casa -->
+    <div id="step-sem-casa" class="login-step hidden">
+      <p>Olá, <strong id="sem-casa-nome"></strong>! Falta entrar numa casa.</p>
+      <form id="form-convite" novalidate>
+        <label for="convite-codigo" class="field-label">Código de convite</label>
+        <input type="text" id="convite-codigo" placeholder="ABCD234567" maxlength="20"
+               autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="go">
+        <button class="primary" type="submit">Entrar na casa</button>
+        <p class="hint" id="convite-hint" role="status"></p>
+      </form>
+      <details class="criar-casa">
+        <summary>Sou eu quem vai criar a casa</summary>
+        <form id="form-nova-casa" novalidate>
+          <label for="casa-nome" class="field-label">Nome da casa</label>
+          <input type="text" id="casa-nome" maxlength="40" placeholder="Ex.: Apê da Rua 7" autocapitalize="sentences" enterkeyhint="go">
+          <button class="primary" type="submit">Criar casa</button>
+          <p class="hint">Você vira administrador(a) e recebe um código para convidar os outros.</p>
+          <p class="hint" id="nova-casa-hint" role="status"></p>
+        </form>
+      </details>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="logout">Sair</button>
+      </div>
     </div>
 
     <div id="login-error" class="hidden">
@@ -105,16 +132,13 @@
             <path d="M20 7 L27 19 L18 22 L28 41" stroke="#fff" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </span>
-        <span>Olá, <span id="who-name"></span><span class="who-sub">Divisão de contas</span></span>
+        <span>Olá, <span id="who-name"></span><span class="who-sub" id="who-casa">Divisão de contas</span></span>
       </div>
       <div class="topbar-right">
         <label for="grupo-switcher" class="visually-hidden">Grupo</label>
         <select id="grupo-switcher" data-change="onGrupoSwitch"></select>
-        <button class="icon-btn" type="button" data-action="refresh" aria-label="Atualizar">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
-        </button>
-        <button class="icon-btn" type="button" data-action="logout" aria-label="Sair">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 16l-4-4 4-4"/><path d="M6 12h10"/></svg>
+        <button class="icon-btn" type="button" data-tab="casa" aria-label="Casa e configurações">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/></svg>
         </button>
       </div>
     </header>
@@ -125,6 +149,7 @@
       <section id="tab-compra" class="hidden"></section>
       <section id="tab-pagamento" class="hidden"></section>
       <section id="tab-historico" class="hidden"></section>
+      <section id="tab-casa" class="hidden"></section>
     </main>
 
     <nav class="tabbar" aria-label="Navegação">
@@ -155,9 +180,7 @@
   <div id="toast" role="status" aria-live="polite"></div>
 </div>
 
-<script src="config.js"></script>
 <script src="vendor/chart.umd.min.js" defer></script>
-<script src="js/api.js" defer></script>
-<script src="js/app.js" defer></script>
+<script type="module" src="js/app.js"></script>
 </body>
 </html>

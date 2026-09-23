@@ -1,0 +1,166 @@
+// Cálculos do Rachaê — equivalentes às fórmulas da antiga planilha.
+// Módulo puro (sem Firebase, sem DOM): recebe os documentos já lidos e
+// devolve os mesmos formatos que o Apps Script devolvia. Valores em CENTAVOS
+// (inteiros) para não ter erro de arredondamento; conversão para reais só no final.
+
+export const reais = c => Math.round(c) / 100;
+
+/** Quem de fato entra na divisão: marcados E membros do grupo (igual à fórmula antiga). */
+function participantesValidos(item, membrosGrupo) {
+  return (item.participantes || []).filter(u => membrosGrupo.has(u));
+}
+
+/**
+ * Valor devido por pessoa (centavos) num lançamento.
+ * - Igual: divide entre os participantes; os centavos que sobram vão para os primeiros.
+ * - Porcentagem: divisao[uid] é fração (0.5 = 50%).
+ * - Valor customizado: divisao[uid] em centavos.
+ */
+export function devidoPorPessoa(item, membrosGrupo) {
+  const parts = participantesValidos(item, membrosGrupo);
+  const out = {};
+  if (!parts.length) return out;
+  if (item.metodo === 'Igual') {
+    const base = Math.floor(item.valor / parts.length);
+    let resto = item.valor - base * parts.length;
+    parts.forEach(u => { out[u] = base + (resto > 0 ? 1 : 0); if (resto > 0) resto--; });
+  } else if (item.metodo === 'Porcentagem') {
+    parts.forEach(u => { out[u] = Math.round(item.valor * (Number((item.divisao || {})[u]) || 0)); });
+  } else {
+    parts.forEach(u => { out[u] = Math.round(Number((item.divisao || {})[u]) || 0); });
+  }
+  return out;
+}
+
+/** Membros (uids) de um grupo; grupos "todos" incluem todo mundo da casa. */
+export function membrosDoGrupo(grupo, membros) {
+  if (!grupo) return new Set();
+  const ativos = new Set(membros.map(m => m.uid));
+  return new Set(grupo.todos ? [...ativos] : (grupo.membros || []).filter(u => ativos.has(u)));
+}
+
+/** Situação de uma compra parcelada: parte, pago e saldo devedor de cada um. */
+export function situacaoCompra(compra, membrosGrupo, pagamentos) {
+  const parte = devidoPorPessoa(compra, membrosGrupo);
+  const pago = {};
+  pagamentos.forEach(p => { if (p.compraId === compra.id) pago[p.pessoa] = (pago[p.pessoa] || 0) + p.valor; });
+  const deve = {};
+  let saldoTotal = 0;
+  Object.keys(parte).forEach(u => {
+    if (u === compra.comprador) return; // o comprador não deve a si mesmo
+    const d = Math.max(0, parte[u] - (pago[u] || 0));
+    if (d > 0) { deve[u] = d; saldoTotal += d; }
+  });
+  // Impacto no saldo: comprador tem a receber o total em aberto; os outros, a pagar
+  const impacto = {};
+  Object.keys(deve).forEach(u => { impacto[u] = -deve[u]; });
+  if (saldoTotal > 0) impacto[compra.comprador] = (impacto[compra.comprador] || 0) + saldoTotal;
+  return { parte, pago, deve, saldoTotal, impacto };
+}
+
+/**
+ * Painel de um grupo para a pessoa logada — mesmo formato do getDashboard antigo.
+ * @param {object} db { membros:[{uid,nome}], grupos:[{id,nome,tipo,todos,membros}], despesas, compras, pagamentos }
+ */
+export function montarDashboard(db, meUid, grupoId) {
+  const nome = u => (db.membros.find(m => m.uid === u) || {}).nome || 'Ex-morador(a)';
+  const grupo = db.grupos.find(g => g.id === grupoId) || null;
+  const membrosG = membrosDoGrupo(grupo, db.membros);
+
+  const pagoAv = {}, devidoAv = {}, parc = {};
+  membrosG.forEach(u => { pagoAv[u] = 0; devidoAv[u] = 0; parc[u] = 0; });
+
+  const catTotals = {}, monthTotals = {}, catPorMesTotals = {};
+  const acumula = (cat, valor, data) => {
+    catTotals[cat] = (catTotals[cat] || 0) + valor;
+    const mes = String(data || '').slice(0, 7);
+    if (!mes) return;
+    monthTotals[mes] = (monthTotals[mes] || 0) + valor;
+    catPorMesTotals[mes] = catPorMesTotals[mes] || {};
+    catPorMesTotals[mes][cat] = (catPorMesTotals[mes][cat] || 0) + valor;
+  };
+
+  db.despesas.filter(d => d.grupoId === grupoId).forEach(d => {
+    acumula(d.categoria, d.valor, d.data);
+    if (d.pagoPor in pagoAv) pagoAv[d.pagoPor] += d.valor;
+    const dev = devidoPorPessoa(d, membrosG);
+    Object.keys(dev).forEach(u => { if (u in devidoAv) devidoAv[u] += dev[u]; });
+  });
+
+  const comprasGrupo = db.compras.filter(c => c.grupoId === grupoId);
+  const comprasEmAberto = [];
+  const reemb = {};
+  membrosG.forEach(u => { reemb[u] = 0; });
+  comprasGrupo.forEach(c => {
+    acumula(c.categoria, c.valor, c.data);
+    const s = situacaoCompra(c, membrosG, db.pagamentos);
+    Object.keys(s.impacto).forEach(u => { if (u in parc) parc[u] += s.impacto[u]; });
+    if ((s.deve[meUid] || 0) > 1) {
+      comprasEmAberto.push({ id: c.id, descricao: c.descricao, saldoDevedor: reais(s.deve[meUid]) });
+    }
+  });
+  const compraPorId = Object.fromEntries(comprasGrupo.map(c => [c.id, c]));
+  db.pagamentos.forEach(p => {
+    const c = compraPorId[p.compraId];
+    if (!c || c.comprador === p.pessoa) return; // auto-pagamento não é reembolso
+    reemb[c.comprador] = (reemb[c.comprador] || 0) + p.valor;
+  });
+
+  const saldosPorPessoa = [...membrosG].map(u => {
+    const saldoAv = pagoAv[u] - devidoAv[u];
+    const saldoGeral = saldoAv + parc[u];
+    return {
+      nome: nome(u),
+      totalPagoAv: reais(pagoAv[u]), totalDevidoAv: reais(devidoAv[u]),
+      saldoAv: reais(saldoAv), saldoParc: reais(parc[u]), saldoGeral: reais(saldoGeral),
+      situacao: saldoGeral > 0 ? 'A RECEBER' : (saldoGeral < 0 ? 'A PAGAR' : 'QUITADO'),
+      _uid: u
+    };
+  }).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+  const lista = obj => Object.keys(obj).map(cat => ({ categoria: cat, valor: reais(obj[cat]) })).sort((a, b) => b.valor - a.valor);
+  const catPorMes = {};
+  Object.keys(catPorMesTotals).forEach(m => { catPorMes[m] = lista(catPorMesTotals[m]); });
+
+  const pessoal = saldosPorPessoa.find(s => s._uid === meUid) || null;
+  return {
+    grupoAtual: grupo ? grupo.nome : null,
+    pessoal,
+    saldosPorPessoa,
+    gastosPorCategoria: lista(catTotals),
+    evolucaoMensal: Object.keys(monthTotals).sort().map(mes => ({ mes, valor: reais(monthTotals[mes]) })),
+    catPorMes,
+    reembolsosPorPessoa: Object.keys(reemb).map(u => ({ nome: nome(u), valor: reais(reemb[u]) })).sort((a, b) => b.valor - a.valor),
+    comprasEmAberto,
+    totalAvulsas: reais(Object.values(pagoAv).reduce((s, v) => s + v, 0))
+  };
+}
+
+const dataBR = iso => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '');
+const porDataDesc = (a, b) => (b.data + (b.criadoEm || '')).localeCompare(a.data + (a.criadoEm || ''));
+export const codigoCompra = id => 'CP-' + String(id).slice(0, 5).toUpperCase();
+
+/** Histórico de um grupo — mesmo formato do getHistorico antigo (últimos 30 de cada). */
+export function montarHistorico(db, grupoId, meUid, souDono) {
+  const nome = u => (db.membros.find(m => m.uid === u) || {}).nome || 'Ex-morador(a)';
+  const grupo = db.grupos.find(g => g.id === grupoId);
+  const membrosG = membrosDoGrupo(grupo, db.membros);
+  const podeApagar = x => souDono || x.criadoPor === meUid;
+
+  const despesas = db.despesas.filter(d => d.grupoId === grupoId).sort(porDataDesc).slice(0, 30).map(d => ({
+    row: d.id, id: d.id, data: dataBR(d.data), descricao: d.descricao, categoria: d.categoria, segmento: d.segmento,
+    grupo: grupo && grupo.nome, valor: reais(d.valor), pagoPor: nome(d.pagoPor), metodo: d.metodo, podeApagar: podeApagar(d)
+  }));
+  const comprasGrupo = db.compras.filter(c => c.grupoId === grupoId);
+  const compras = comprasGrupo.slice().sort(porDataDesc).slice(0, 30).map(c => ({
+    id: codigoCompra(c.id), docId: c.id, data: dataBR(c.data), descricao: c.descricao, categoria: c.categoria,
+    grupo: grupo && grupo.nome, valorTotal: reais(c.valor), comprador: nome(c.comprador), nParcelas: c.nParcelas,
+    saldoTotal: reais(situacaoCompra(c, membrosG, db.pagamentos).saldoTotal), podeApagar: podeApagar(c)
+  }));
+  const compraPorId = Object.fromEntries(comprasGrupo.map(c => [c.id, c]));
+  const pagamentos = db.pagamentos.filter(p => compraPorId[p.compraId]).sort(porDataDesc).slice(0, 30).map(p => ({
+    id: p.id, data: dataBR(p.data), compraId: codigoCompra(p.compraId), descricao: compraPorId[p.compraId].descricao,
+    pessoa: nome(p.pessoa), valor: reais(p.valor), podeApagar: souDono || p.pessoa === meUid
+  }));
+  return { despesas, compras, pagamentos };
+}

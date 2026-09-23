@@ -1,4 +1,5 @@
-'use strict';
+import * as Firebase from './api.js';
+import { api } from './api.js';
 
 // =================================================================== Estado
 const STATE = {
@@ -27,7 +28,6 @@ const K = {
   grupo: 'rachae_grupo',
   config: 'rachae_cache_config',
   grupos: 'rachae_cache_grupos',
-  dash: g => 'rachae_cache_dash_' + g,
   tags: 'rachae_tags',
   installDismissed: 'rachae_install_dismissed'
 };
@@ -65,6 +65,7 @@ function showToast(msg, isError) {
 function vibrate(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} }
 function onApiError(err) {
   if (err && err.code === 'AUTH') { showToast(err.message, true); goToLogin(); return; }
+  if (err && err.code === 'permission-denied') { showToast('Sem permissão. Talvez você tenha sido removida(o) da casa.', true); return; }
   showToast((err && err.message) || 'Erro inesperado.', true);
 }
 async function withBusy(btn, fn) {
@@ -105,95 +106,94 @@ document.addEventListener('keydown', ev => {
 ACTIONS.reload = () => location.reload();
 
 // =================================================================== Init / Login
+function mostrarPasso(id) {
+  ['login-step-loading', 'form-entrar', 'form-conta', 'form-senha', 'step-sem-casa', 'login-error']
+    .forEach(x => $(x).classList.toggle('hidden', x !== id));
+}
+function mostrarErroInicial(msg) {
+  mostrarPasso('login-error');
+  $('login-error-msg').textContent = msg;
+}
+function hint(id, msg, tipo) {
+  const el = $(id);
+  el.textContent = msg || '';
+  el.className = 'hint' + (tipo ? ' ' + tipo : '');
+}
+
 async function init() {
-  $('login-step-email').dataset.submit = 'submitEmailLogin';
-  $('login-step-code').dataset.submit = 'submitCodigo';
-  $('login-step-cadastro').dataset.submit = 'submitCadastro';
+  ['form-entrar', 'form-conta', 'form-senha', 'form-convite', 'form-nova-casa'].forEach(id => {
+    $(id).dataset.submit = 'submit_' + id.replace(/-/g, '_');
+  });
   lerConviteDaUrl();
   updateOnlineStatus();
   window.addEventListener('online', updateOnlineStatus);
   window.addEventListener('offline', updateOnlineStatus);
   setupInstallPrompt();
+  // Outra pessoa lançou algo: atualiza a tela na hora (Firestore em tempo real)
+  let timer = null;
+  window.addEventListener('rachae:dados', () => {
+    clearTimeout(timer);
+    timer = setTimeout(atualizarAoVivo, 300);
+  });
 
-  // Mostra o app na hora com os dados em cache e atualiza em segundo plano
-  const cachedConfig = store.get(K.config);
-  const cachedPessoa = store.get(K.pessoa);
-  if (cachedConfig && cachedPessoa && getToken()) {
-    STATE.config = cachedConfig;
-    enterApp(cachedPessoa, { fromCache: true });
+  if (!Firebase.configurado) {
+    mostrarErroInicial('App ainda não configurado: preencha public/firebase-config.js (veja o README).');
+    return;
   }
-
   try {
-    const [config, sessao] = await Promise.all([
-      api('config'),
-      getToken() ? api('sessao').catch(err => (err.code === 'AUTH' ? null : Promise.reject(err))) : null
-    ]);
-    STATE.config = config;
-    store.set(K.config, config);
-    if (sessao) {
-      if (STATE.pessoa !== sessao.nome) enterApp(sessao.nome);
-    } else {
-      showLoginStep();
-    }
+    const user = await Firebase.aguardarSessao();
+    if (!user) { irParaLogin(); return; }
+    await abrirCasa(user);
   } catch (err) {
-    if (STATE.pessoa) { onApiError(err); return; } // já está no app com cache
-    $('login-step-loading').classList.add('hidden');
-    $('login-error').classList.remove('hidden');
-    $('login-error-msg').textContent = err.message;
+    mostrarErroInicial(err.message);
   }
 }
 
-function showLoginStep() {
+// Depois do login: entra no app se já tem casa, senão pede convite / criar casa
+async function abrirCasa(user) {
+  mostrarPasso('login-step-loading');
+  const casa = await Firebase.carregarCasa();
+  if (!casa) {
+    $('sem-casa-nome').textContent = user.displayName || user.email;
+    if (CONVITE_URL) $('convite-codigo').value = CONVITE_URL;
+    mostrarPasso('step-sem-casa');
+    // Chegou pelo link de convite e acabou de criar a conta: entra direto
+    if (CONVITE_URL && user.displayName) ACTIONS.submit_form_convite($('form-convite'));
+    return;
+  }
+  STATE.casa = casa;
+  STATE.config = await api('config');
+  enterApp(casa.meuNome);
+}
+
+function irParaLogin() {
   STATE.pessoa = null;
   document.body.classList.add('on-login');
   $('screen-app').classList.add('hidden');
   $('screen-login').classList.remove('hidden');
-  ['login-step-loading', 'login-step-code', 'login-step-email', 'login-step-cadastro', 'login-step-nomes', 'login-error']
-    .forEach(id => $(id).classList.add('hidden'));
-  $('login-codigo').value = '';
-  clearInterval(RESEND_TIMER);
-  LOGIN_MODO = 'login';
-
-  const config = STATE.config;
-  const podeCadastrar = !!config.cadastroAberto && config.vagas > 0;
-  $('cadastro-link').classList.toggle('hidden', !podeCadastrar);
-  if (config.emailsConfigured || config.cadastroAberto) {
-    // Chegou por um link de convite: abre direto o cadastro
-    if (podeCadastrar && CONVITE_URL) ACTIONS.irParaCadastro();
-    else $('login-step-email').classList.remove('hidden');
-  } else if (!config.names.length) {
-    $('login-error').classList.remove('hidden');
-    $('login-error-msg').textContent = 'Ninguém cadastrado ainda. Quem administra a planilha precisa rodar gerarCodigoConvite no Apps Script.';
+  if (CONVITE_URL) {
+    $('conta-convite').value = CONVITE_URL;
+    mostrarPasso('form-conta');
   } else {
-    $('login-step-nomes').classList.remove('hidden');
-    $('name-grid').innerHTML = config.names.map(nome =>
-      `<button type="button" class="name-btn" data-action="loginPorNome" data-nome="${h(nome)}">
-        <div class="name-avatar">${h(nome.charAt(0).toUpperCase())}</div>${h(nome)}
-      </button>`).join('');
+    mostrarPasso('form-entrar');
   }
   renderInstallBanner();
 }
-function goToLogin() {
-  setToken(null);
+async function goToLogin() {
+  await Firebase.sair().catch(() => {});
   store.remove(K.pessoa);
-  if (STATE.config) showLoginStep(); else location.reload();
+  irParaLogin();
 }
-
-ACTIONS.loginPorNome = async el => {
-  try {
-    const res = await api('loginPorNome', { nome: el.dataset.nome });
-    setToken(res.token);
-    enterApp(res.nome);
-  } catch (err) { onApiError(err); }
+ACTIONS.irPara = el => {
+  const passo = el.dataset.step;
+  // leva o email digitado de um formulário para o outro
+  const email = ['entrar-email', 'conta-email', 'senha-email'].map(id => $(id).value.trim()).find(Boolean) || '';
+  ['entrar-email', 'conta-email', 'senha-email'].forEach(id => { if (!$(id).value) $(id).value = email; });
+  mostrarPasso(passo);
 };
 
-// ---------- Login por email (código de verificação) ----------
-let LOGIN_EMAIL_ATUAL = '';
-let RESEND_TIMER = null;
-let LOGIN_MODO = 'login'; // 'login' ou 'cadastro' — define o que o código de 6 dígitos confirma
+// Link de convite: https://.../?convite=ABCD234567 preenche o código sozinho
 let CONVITE_URL = '';
-
-// Link de convite: https://.../?convite=ABCD2345 preenche o código sozinho
 function lerConviteDaUrl() {
   try {
     const url = new URL(location.href);
@@ -204,158 +204,120 @@ function lerConviteDaUrl() {
     history.replaceState(null, '', url.pathname + url.search + url.hash);
   } catch (e) {}
 }
-function mostrarPassoCodigo(email) {
-  $('login-email-shown').textContent = email;
-  $('login-codigo-hint').textContent = '';
-  $('login-codigo').value = '';
-  $('login-step-email').classList.add('hidden');
-  $('login-step-cadastro').classList.add('hidden');
-  $('login-step-code').classList.remove('hidden');
-  $('login-codigo').focus();
-  startResendCooldown();
-}
 
-ACTIONS.submitEmailLogin = async form => {
-  const email = $('login-email').value.trim();
-  const hint = $('login-email-hint');
-  if (!email) { hint.textContent = 'Digite um email.'; hint.className = 'hint error'; return; }
-  LOGIN_EMAIL_ATUAL = email;
-  hint.textContent = 'Enviando código...';
-  hint.className = 'hint';
+ACTIONS.submit_form_entrar = async form => {
+  const email = $('entrar-email').value.trim(), senha = $('entrar-senha').value;
+  if (!email || !senha) { hint('entrar-hint', 'Preencha email e senha.', 'error'); return; }
+  hint('entrar-hint', 'Entrando...');
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      await api('iniciarLogin', { email });
-      hint.textContent = '';
-      LOGIN_MODO = 'login';
-      mostrarPassoCodigo(email);
-    } catch (err) {
-      hint.textContent = err.message; hint.className = 'hint error';
-    }
+      const user = await Firebase.entrar(email, senha);
+      hint('entrar-hint', '');
+      $('entrar-senha').value = '';
+      await abrirCasa(user);
+    } catch (err) { hint('entrar-hint', err.message, 'error'); vibrate(80); }
   });
 };
-ACTIONS.submitCodigo = async form => {
-  const codigo = $('login-codigo').value.replace(/\D/g, '');
-  const hint = $('login-codigo-hint');
-  if (codigo.length !== 6) { hint.textContent = 'Digite os 6 dígitos recebidos por email.'; hint.className = 'hint error'; return; }
-  hint.textContent = 'Verificando...';
-  hint.className = 'hint';
-  await withBusy(form.querySelector('button[type=submit]'), async () => {
-    try {
-      const res = await api(LOGIN_MODO === 'cadastro' ? 'confirmarCadastro' : 'confirmarCodigo',
-        { email: LOGIN_EMAIL_ATUAL, codigo });
-      setToken(res.token);
-      clearInterval(RESEND_TIMER);
-      if (LOGIN_MODO === 'cadastro') {
-        // A lista de pessoas mudou: recarrega a Config antes de entrar
-        try { STATE.config = await api('config'); store.set(K.config, STATE.config); } catch (e) {}
-        CONVITE_URL = '';
-        showToast('Cadastro feito! Bem-vinda(o), ' + res.nome + '.');
-      }
-      enterApp(res.nome);
-    } catch (err) {
-      hint.textContent = err.message; hint.className = 'hint error';
-      vibrate(80);
-    }
-  });
-};
-// Envia sozinho quando o iOS/Android preenche o código automaticamente
-$('login-codigo').addEventListener('input', e => {
-  if (e.target.value.replace(/\D/g, '').length !== 6) return;
-  const form = $('login-step-code');
-  if (form.requestSubmit) form.requestSubmit(); else ACTIONS.submitCodigo(form);
-});
-ACTIONS.voltarParaEmail = () => {
-  clearInterval(RESEND_TIMER);
-  LOGIN_MODO = 'login';
-  $('login-step-code').classList.add('hidden');
-  $('login-step-cadastro').classList.add('hidden');
-  $('login-step-email').classList.remove('hidden');
-};
-ACTIONS.irParaCadastro = () => {
-  clearInterval(RESEND_TIMER);
-  $('login-step-email').classList.add('hidden');
-  $('login-step-code').classList.add('hidden');
-  $('login-step-cadastro').classList.remove('hidden');
-  $('cad-hint').textContent = '';
-  if (CONVITE_URL && !$('cad-convite').value) $('cad-convite').value = CONVITE_URL;
-  if (!$('cad-email').value && $('login-email').value) $('cad-email').value = $('login-email').value.trim();
-};
-ACTIONS.submitCadastro = async form => {
-  const nome = $('cad-nome').value.trim().replace(/\s+/g, ' ');
-  const email = $('cad-email').value.trim();
-  const convite = $('cad-convite').value.trim();
-  const hint = $('cad-hint');
-  const erro = !nome ? 'Digite seu nome.'
+
+ACTIONS.submit_form_conta = async form => {
+  const nome = $('conta-nome').value.trim().replace(/\s+/g, ' ');
+  const email = $('conta-email').value.trim();
+  const senha = $('conta-senha').value;
+  const convite = $('conta-convite').value.trim().toUpperCase();
+  const erro = !/^[\p{L}][\p{L} .'-]{0,19}$/u.test(nome) ? 'Digite seu nome (até 20 letras, sem números).'
     : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? 'Digite um email válido.'
-    : !convite ? 'Digite o código de convite.' : null;
-  if (erro) { hint.textContent = erro; hint.className = 'hint error'; vibrate(60); return; }
-  hint.textContent = 'Enviando código...';
-  hint.className = 'hint';
+    : senha.length < 8 ? 'A senha precisa ter pelo menos 8 caracteres.' : null;
+  if (erro) { hint('conta-hint', erro, 'error'); vibrate(60); return; }
+  hint('conta-hint', 'Criando conta...');
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      await api('iniciarCadastro', { nome, email, convite });
-      hint.textContent = '';
-      LOGIN_EMAIL_ATUAL = email;
-      LOGIN_MODO = 'cadastro';
-      mostrarPassoCodigo(email);
-    } catch (err) {
-      hint.textContent = err.message; hint.className = 'hint error';
-    }
+      const user = await Firebase.criarConta(nome, email, senha);
+      $('conta-senha').value = '';
+      hint('conta-hint', '');
+      if (convite) CONVITE_URL = convite;
+      await abrirCasa(user);
+    } catch (err) { hint('conta-hint', err.message, 'error'); vibrate(80); }
   });
 };
-function startResendCooldown() {
-  const btn = $('resend-btn');
-  let s = 30;
-  btn.disabled = true;
-  btn.textContent = 'Reenviar (' + s + 's)';
-  clearInterval(RESEND_TIMER);
-  RESEND_TIMER = setInterval(() => {
-    s--;
-    if (s <= 0) { clearInterval(RESEND_TIMER); btn.disabled = false; btn.textContent = 'Reenviar código'; }
-    else btn.textContent = 'Reenviar (' + s + 's)';
-  }, 1000);
-}
-ACTIONS.reenviarCodigo = () => (LOGIN_MODO === 'cadastro'
-  ? ACTIONS.submitCadastro($('login-step-cadastro'))
-  : ACTIONS.submitEmailLogin($('login-step-email')));
+
+ACTIONS.submit_form_senha = async form => {
+  const email = $('senha-email').value.trim();
+  if (!email) { hint('senha-hint', 'Digite seu email.', 'error'); return; }
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      await Firebase.esqueciSenha(email);
+      hint('senha-hint', 'Pronto! Se esse email tiver conta, o link chega em instantes (confira o spam).', 'ok');
+    } catch (err) { hint('senha-hint', err.message, 'error'); }
+  });
+};
+
+ACTIONS.submit_form_convite = async form => {
+  const codigo = $('convite-codigo').value.trim();
+  if (!codigo) { hint('convite-hint', 'Digite o código de convite.', 'error'); return; }
+  const user = Firebase.usuarioAtual();
+  hint('convite-hint', 'Entrando na casa...');
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      await Firebase.entrarComConvite(codigo, user.displayName || user.email.split('@')[0]);
+      CONVITE_URL = '';
+      hint('convite-hint', '');
+      await abrirCasa(user);
+      showToast('Bem-vinda(o) à casa!');
+    } catch (err) { hint('convite-hint', err.message, 'error'); vibrate(80); }
+  });
+};
+
+ACTIONS.submit_form_nova_casa = async form => {
+  const user = Firebase.usuarioAtual();
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      await Firebase.criarCasa($('casa-nome').value, user.displayName || user.email.split('@')[0]);
+      await abrirCasa(user);
+      switchTab('casa');
+      showToast('Casa criada! Agora convide os moradores.');
+    } catch (err) { hint('nova-casa-hint', err.message, 'error'); }
+  });
+};
 
 // ---------- Sessão ----------
-function enterApp(nome, opts = {}) {
+function enterApp(nome) {
   STATE.pessoa = nome;
   store.set(K.pessoa, nome);
   document.body.classList.remove('on-login');
   $('screen-login').classList.add('hidden');
   $('screen-app').classList.remove('hidden');
   $('who-name').textContent = nome;
-  loadGrupos(opts.fromCache);
+  $('who-casa').textContent = (STATE.casa && STATE.casa.nome) || 'Divisão de contas';
+  loadGrupos();
 }
 ACTIONS.logout = async () => {
   if (!confirm('Sair deste aparelho?')) return;
-  const token = getToken();
-  goToLogin();
-  if (token) api('logout', { token }).catch(() => {});
+  await goToLogin();
 };
 ACTIONS.refresh = () => refreshCurrentTabData();
 
-// ---------- Grupos ----------
-async function loadGrupos(fromCache) {
-  const cached = store.get(K.grupos);
-  if (fromCache && cached) { applyGrupos(cached); switchTab('dashboard'); }
+// Recarrega o que a tela atual mostra quando os dados mudam em outro aparelho.
+// Formulários não são redesenhados (para não apagar o que a pessoa está digitando).
+async function atualizarAoVivo() {
+  if (!STATE.pessoa) return;
   try {
-    const grupos = await api('grupos');
-    store.set(K.grupos, grupos);
-    const mudou = JSON.stringify(grupos) !== JSON.stringify(cached);
-    applyGrupos(grupos);
-    if (!fromCache || !cached) switchTab('dashboard');
-    else if (mudou) refreshCurrentTabData();
+    STATE.config = await api('config');
+    applyGrupos(await api('grupos'));
+    const saiuDaCasa = STATE.config.names.indexOf(STATE.pessoa) === -1;
+    if (saiuDaCasa) { showToast('Você não faz mais parte desta casa.', true); goToLogin(); return; }
+    if (['dashboard', 'historico', 'casa'].includes(STATE.currentTab)) refreshCurrentTabData();
+  } catch (err) { /* sem conexão: tenta na próxima mudança */ }
+}
+
+// ---------- Grupos ----------
+async function loadGrupos() {
+  try {
+    applyGrupos(await api('grupos'));
   } catch (err) {
-    if (err.code === 'AUTH') { onApiError(err); return; }
-    if (!fromCache || !cached) {
-      showToast('Erro ao carregar grupos: ' + err.message, true);
-      STATE.grupos = [];
-      switchTab('dashboard');
-    }
+    showToast('Erro ao carregar grupos: ' + err.message, true);
+    STATE.grupos = [];
   }
+  switchTab(STATE.currentTab === 'casa' ? 'casa' : 'dashboard');
 }
 function applyGrupos(grupos) {
   STATE.grupos = grupos || [];
@@ -377,7 +339,7 @@ ACTIONS.onGrupoSwitch = sel => {
   refreshCurrentTabData();
 };
 function refreshCurrentTabData() {
-  switchTab(STATE.currentTab);
+  switchTab(STATE.currentTab, { keepScroll: true });
 }
 function grupoMembros(nomeGrupo) {
   const g = STATE.grupos.find(g => g.nome === nomeGrupo);
@@ -458,9 +420,9 @@ ACTIONS.removeDraftTag = el => {
 };
 
 // =================================================================== Navegação
-function switchTab(tab) {
+function switchTab(tab, opts = {}) {
   STATE.currentTab = tab;
-  ['dashboard', 'despesa', 'compra', 'pagamento', 'historico'].forEach(t => {
+  ['dashboard', 'despesa', 'compra', 'pagamento', 'historico', 'casa'].forEach(t => {
     $('tab-' + t).classList.toggle('hidden', t !== tab);
   });
   document.querySelectorAll('nav.tabbar button').forEach(b => {
@@ -468,27 +430,23 @@ function switchTab(tab) {
     b.classList.toggle('active', active);
     if (active) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
-  window.scrollTo(0, 0);
+  if (!opts.keepScroll) window.scrollTo(0, 0);
 
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'despesa') renderDespesaForm();
   if (tab === 'compra') renderCompraForm();
   if (tab === 'pagamento') renderPagamentoForm();
   if (tab === 'historico') loadHistorico();
+  if (tab === 'casa') renderCasa();
 }
 
 // =================================================================== Dashboard
 async function loadDashboard() {
   const grupo = STATE.grupoAtual;
-  const cached = grupo ? store.get(K.dash(grupo)) : null;
-  if (cached) { STATE.dashboard = cached; renderDashboard(cached); }
-  else $('tab-dashboard').innerHTML = '<div class="spinner">Carregando...</div>';
-
   try {
     const d = await api('dashboard', { grupo });
-    if (STATE.currentTab !== 'dashboard' || STATE.grupoAtual !== grupo) return; // usuário já saiu
+    if (STATE.currentTab !== 'dashboard') return;
     STATE.dashboard = d;
-    if (d.grupoAtual) store.set(K.dash(d.grupoAtual), d);
     if (d.grupoAtual && d.grupoAtual !== STATE.grupoAtual) {
       STATE.grupoAtual = d.grupoAtual;
       store.set(K.grupo, d.grupoAtual);
@@ -497,10 +455,8 @@ async function loadDashboard() {
     renderDashboard(d);
   } catch (err) {
     onApiError(err);
-    if (!cached && STATE.currentTab === 'dashboard') {
-      $('tab-dashboard').innerHTML = `<div class="card"><p class="empty">${h(err.message)}</p>
-        <button class="primary" type="button" data-action="refresh">Tentar de novo</button></div>`;
-    }
+    $('tab-dashboard').innerHTML = `<div class="card"><p class="empty">${h(err.message)}</p>
+      <button class="primary" type="button" data-action="refresh">Tentar de novo</button></div>`;
   }
 }
 function statusIconSvg(kind) {
@@ -952,9 +908,6 @@ function validarLancamento(prefix, valorTotal, participantes) {
   }
   return null;
 }
-function invalidateDashCache() {
-  if (STATE.grupoAtual) store.remove(K.dash(STATE.grupoAtual));
-}
 
 ACTIONS.submitDespesa = async form => {
   const metodo = $('desp-metodo').value;
@@ -979,7 +932,6 @@ ACTIONS.submitDespesa = async form => {
     try {
       const res = await api('addDespesa', { payload });
       if (tags.length && res && res.row) saveTags('desp:' + res.row, tags);
-      invalidateDashCache();
       vibrate(20);
       showToast('Despesa adicionada!');
       renderDespesaForm();
@@ -1019,7 +971,6 @@ ACTIONS.submitCompra = async form => {
     try {
       const res = await api('addCompraParcelada', { payload });
       if (tags.length && res && res.id) saveTags('compra:' + res.id, tags);
-      invalidateDashCache();
       vibrate(20);
       showToast('Compra adicionada!' + (res && res.id ? ' ID: ' + res.id : ''));
       renderCompraForm();
@@ -1083,7 +1034,6 @@ ACTIONS.submitPagamento = async form => {
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
       await api('addPagamento', { payload });
-      invalidateDashCache();
       vibrate(20);
       showToast('Pagamento registrado!');
       renderPagamentoForm();
@@ -1119,26 +1069,156 @@ function renderHistorico(data) {
         <div class="top"><span>${h(d.descricao)}</span><span>${fmtBRL(d.valor)}</span></div>
         <div class="sub">${h(d.data)} · ${h(d.categoria)}${d.segmento ? ' · ' + h(d.segmento) : ''} · pago por ${h(d.pagoPor)} · ${h(d.metodo)}</div>
         <div id="tags-desp-${h(d.row)}"></div>
+        ${apagarBtn('despesas', d.id, d.podeApagar)}
       </div>`).join('') : '<p class="empty">Nenhuma despesa lançada ainda.</p>')}
     ${card('compras', data.compras.length ? data.compras.map(c => `
       <div class="hist-item">
         <div class="top"><span>${h(c.descricao)}</span><span>${fmtBRL(c.valorTotal)}</span></div>
         <div class="sub">${h(c.id)} · ${h(c.data)} · ${h(c.categoria)} · ${h(c.comprador)} em ${h(c.nParcelas)}x · em aberto: ${fmtBRL(c.saldoTotal)}</div>
         <div id="tags-compra-${h(c.id)}"></div>
+        ${apagarBtn('compras', c.docId, c.podeApagar)}
       </div>`).join('') : '<p class="empty">Nenhuma compra parcelada lançada ainda.</p>')}
     ${card('pagamentos', data.pagamentos.length ? data.pagamentos.map(p => `
       <div class="hist-item">
         <div class="top"><span>${h(p.pessoa)} · ${h(p.descricao || p.compraId)}</span><span>${fmtBRL(p.valor)}</span></div>
         <div class="sub">${h(p.data)} · compra ${h(p.compraId)}</div>
+        ${apagarBtn('pagamentos', p.id, p.podeApagar)}
       </div>`).join('') : '<p class="empty">Nenhum pagamento registrado ainda.</p>')}
   `;
   data.despesas.forEach(d => renderHistTags('tags-desp-' + d.row, 'desp:' + d.row));
   data.compras.forEach(c => renderHistTags('tags-compra-' + c.id, 'compra:' + c.id));
 }
+function apagarBtn(colecao, id, pode) {
+  return pode ? `<button type="button" class="del-btn" data-action="apagarItem" data-colecao="${colecao}" data-id="${h(id)}">Apagar</button>` : '';
+}
+ACTIONS.apagarItem = async el => {
+  if (!confirm('Apagar este lançamento? Os saldos de todos serão recalculados.')) return;
+  try {
+    await api('apagar', { colecao: el.dataset.colecao, id: el.dataset.id });
+    showToast('Apagado.');
+    loadHistorico();
+  } catch (err) { onApiError(err); }
+};
 ACTIONS.showHistSeg = el => {
   HIST_SEG = el.dataset.seg;
   ['despesas', 'compras', 'pagamentos'].forEach(s => $('hist-' + s).classList.toggle('hidden', s !== HIST_SEG));
   document.querySelectorAll('.segmented button').forEach(b => b.classList.toggle('active', b.dataset.seg === HIST_SEG));
+};
+
+// =================================================================== Casa (membros, convite, grupos)
+let GRUPO_EDITANDO = null; // null = fechado, '' = novo, id = editando
+async function renderCasa() {
+  const el = $('tab-casa');
+  const casa = Firebase.casaAtual();
+  if (!casa) return;
+  const dono = Firebase.souDono();
+  const membros = await api('membros');
+  const grupos = await api('grupos');
+  const convite = dono ? Firebase.conviteAtual() : null;
+  const link = convite ? location.origin + location.pathname + '?convite=' + convite : '';
+  const eu = Firebase.usuarioAtual();
+
+  el.innerHTML = `
+    <div class="card">
+      <h3>${h(casa.nome)}</h3>
+      ${membros.map(m => `
+        <div class="list-row">
+          <div>${h(m.nome)}${m.dono ? '<span class="badge">admin</span>' : ''}${m.uid === eu.uid ? '<span class="badge">você</span>' : ''}
+            <div class="sub">${h(m.email)}</div></div>
+          ${dono && !m.dono ? `<button type="button" class="del-btn" data-action="removerMembro" data-uid="${h(m.uid)}" data-nome="${h(m.nome)}">Remover</button>` : ''}
+        </div>`).join('')}
+    </div>
+
+    ${dono ? `
+    <div class="card">
+      <h3>Convidar moradores</h3>
+      ${convite ? `
+        <div class="convite-box">${h(convite)}</div>
+        <p class="hint">Mande o link abaixo. Quem abrir cria a conta e já entra na casa.</p>
+        <button class="primary" type="button" data-action="compartilharConvite" data-link="${h(link)}">Compartilhar link de convite</button>
+        <div class="btn-row">
+          <button class="secondary" type="button" data-action="novoConvite">Gerar outro código</button>
+          <button class="secondary danger" type="button" data-action="fecharConvite">Fechar convites</button>
+        </div>`
+      : `<p class="hint">Nenhum convite aberto neste aparelho.</p>
+         <button class="primary" type="button" data-action="novoConvite">Gerar código de convite</button>`}
+    </div>` : ''}
+
+    <div class="card">
+      <h3>Grupos</h3>
+      <p class="hint" style="margin:-6px 0 8px">O grupo com todos inclui automaticamente quem entrar na casa.</p>
+      ${grupos.map(g => `
+        <div class="list-row">
+          <div>${h(g.nome)}${g.todos ? '<span class="badge">todos</span>' : ''}
+            <div class="sub">${h(g.tipo)} · ${g.membros.map(h).join(', ') || 'ninguém'}</div></div>
+          ${!g.todos && (dono || g.criadoPor === eu.uid) ? `<button type="button" class="del-btn" data-action="editarGrupo" data-id="${h(g.id)}">Editar</button>` : ''}
+        </div>`).join('')}
+      <div id="grupo-form"></div>
+      ${GRUPO_EDITANDO === null ? '<button class="secondary" type="button" data-action="editarGrupo" data-id="">+ Novo grupo</button>' : ''}
+    </div>
+
+    <div class="card">
+      <h3>Conta</h3>
+      <p class="hint" style="margin-top:0">Entrou como ${h(eu.email)}</p>
+      <button class="secondary danger" type="button" data-action="logout">Sair deste aparelho</button>
+    </div>
+  `;
+  if (GRUPO_EDITANDO !== null) renderGrupoForm(grupos.find(g => g.id === GRUPO_EDITANDO) || null);
+}
+function renderGrupoForm(grupo) {
+  const nomes = STATE.config.names;
+  $('grupo-form').innerHTML = `
+    <form data-submit="salvarGrupo" novalidate>
+      <label for="grupo-nome">${grupo ? 'Editar grupo' : 'Novo grupo'}</label>
+      <input type="text" id="grupo-nome" maxlength="30" placeholder="Ex.: Viagem de julho" value="${grupo ? h(grupo.nome) : ''}">
+      <label for="grupo-tipo">Tipo</label>
+      <select id="grupo-tipo">${optionsHtml(['Compartilhado', 'Pessoal'], grupo ? grupo.tipo : 'Compartilhado')}</select>
+      <span class="field-label">Quem faz parte</span>
+      <div class="participa-grid">
+        ${nomes.map(n => `<label class="participa-item"><input type="checkbox" class="grupo-membro" data-nome="${h(n)}"
+          ${(grupo ? grupo.membros.includes(n) : n === STATE.pessoa) ? 'checked' : ''}> ${h(n)}</label>`).join('')}
+      </div>
+      <div class="btn-row">
+        <button class="secondary" type="button" data-action="cancelarGrupo">Cancelar</button>
+        <button class="primary" type="submit">Salvar</button>
+      </div>
+    </form>`;
+  $('grupo-nome').focus();
+}
+ACTIONS.editarGrupo = el => { GRUPO_EDITANDO = el.dataset.id || ''; renderCasa(); };
+ACTIONS.cancelarGrupo = () => { GRUPO_EDITANDO = null; renderCasa(); };
+ACTIONS.salvarGrupo = async form => {
+  const membros = Array.from(document.querySelectorAll('.grupo-membro:checked')).map(i => i.dataset.nome);
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      await api('salvarGrupo', { id: GRUPO_EDITANDO || null, nome: $('grupo-nome').value, tipo: $('grupo-tipo').value, membros });
+      GRUPO_EDITANDO = null;
+      showToast('Grupo salvo!');
+      applyGrupos(await api('grupos'));
+      renderCasa();
+    } catch (err) { onApiError(err); }
+  });
+};
+ACTIONS.novoConvite = async () => {
+  if (Firebase.conviteAtual() && !confirm('Gerar um código novo? O código atual deixa de funcionar.')) return;
+  try { await Firebase.novoConvite(); renderCasa(); } catch (err) { onApiError(err); }
+};
+ACTIONS.fecharConvite = async () => {
+  if (!confirm('Fechar os convites? Ninguém novo consegue entrar até você gerar outro código.')) return;
+  try { await Firebase.fecharConvite(); renderCasa(); showToast('Convites fechados.'); } catch (err) { onApiError(err); }
+};
+ACTIONS.compartilharConvite = async el => {
+  const link = el.dataset.link;
+  const texto = 'Entra na nossa casa no Rachaê pra gente dividir as contas: ' + link;
+  try {
+    if (navigator.share) { await navigator.share({ title: 'Rachaê', text: texto, url: link }); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(link); showToast('Link copiado!'); }
+  catch (e) { prompt('Copie o link:', link); }
+};
+ACTIONS.removerMembro = async el => {
+  if (!confirm('Remover ' + el.dataset.nome + ' da casa? Os lançamentos dela continuam no histórico.')) return;
+  try { await api('removerMembro', { uid: el.dataset.uid }); showToast('Pessoa removida.'); } catch (err) { onApiError(err); }
 };
 
 // =================================================================== Instalação / PWA
