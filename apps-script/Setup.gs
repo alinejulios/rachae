@@ -32,6 +32,13 @@ function criarPlanilhaDoZero() {
   const cfg = existe(SHEET_CONFIG) || setupConfig_(ss);
   const grupos = existe(SHEET_GRUPOS) || setupGrupos_(ss, cfg);
   existe(SHEET_DESPESAS) || setupDespesas_(ss, cfg, grupos);
+  // Uma execução anterior pode ter deixado Compras Parceladas pela metade (sem
+  // colunas suficientes). Se ela ainda não tem nenhuma compra lançada, recria.
+  const comprasSh = ss.getSheetByName(SHEET_COMPRAS);
+  if (comprasSh && comprasSh.getMaxColumns() < C_IMPACTO[4] && comprasSh.getLastRow() <= 2) {
+    Logger.log('Aba "' + SHEET_COMPRAS + '" estava incompleta — recriando.');
+    ss.deleteSheet(comprasSh);
+  }
   existe(SHEET_COMPRAS) || setupCompras_(ss, cfg, grupos);
   existe(SHEET_PAGAMENTOS) || setupPagamentos_(ss);
   rebuildResumoMensal_(ss);
@@ -77,6 +84,11 @@ function listValidation_(range) {
   return SpreadsheetApp.newDataValidation().requireValueInRange(range, true).setAllowInvalid(false).build();
 }
 const nomeCfg_ = p => `Config!$B$${5 + p}`;
+// Abas novas nascem com 26 colunas (A–Z); acrescenta as que faltarem
+function garantirColunas_(sh, n) {
+  const faltam = n - sh.getMaxColumns();
+  if (faltam > 0) sh.insertColumnsAfter(sh.getMaxColumns(), faltam);
+}
 
 // ---------------------------------------------------------------- Config
 
@@ -233,6 +245,7 @@ function setupDespesas_(ss, cfg, grupos) {
 
 function setupCompras_(ss, cfg, grupos) {
   const sh = ss.insertSheet(SHEET_COMPRAS);
+  garantirColunas_(sh, C_IMPACTO[4]);
   const n = PARC_END - PARC_START + 1;
   const lastCol = C_IMPACTO[4];
 
