@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Rachaê</title>
+<meta name="description" content="Divisão de contas de casa">
+
+<!-- PWA / tela inicial -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#2f6fed" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#171b23" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Rachaê">
+<meta name="format-detection" content="telephone=no">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body class="on-login">
+<div id="app">
+
+  <!-- LOGIN -->
+  <div id="screen-login">
+    <div class="brand-mark">
+      <svg viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <path d="M20 7 L27 19 L18 22 L28 41" stroke="#fff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <h1>Rachaê</h1>
+
+    <div id="login-step-loading"><div class="spinner">Carregando...</div></div>
+
+    <form id="login-step-email" class="hidden" novalidate>
+      <p>Digite seu email para receber um código de acesso.</p>
+      <label for="login-email" class="visually-hidden">Email</label>
+      <input type="email" id="login-email" placeholder="seuemail@exemplo.com"
+             autocomplete="email" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="send">
+      <button class="primary" type="submit">Enviar código</button>
+      <p class="hint" id="login-email-hint" role="status"></p>
+    </form>
+
+    <form id="login-step-code" class="hidden" novalidate>
+      <p>Digite o código de 6 dígitos enviado para <strong id="login-email-shown"></strong>.</p>
+      <label for="login-codigo" class="visually-hidden">Código</label>
+      <input type="text" id="login-codigo" placeholder="000000" maxlength="6"
+             inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="done">
+      <button class="primary" type="submit">Confirmar código</button>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="voltarParaEmail">Trocar email</button>
+        <button type="button" class="link-btn" id="resend-btn" data-action="reenviarCodigo">Reenviar código</button>
+      </div>
+      <p class="hint" id="login-codigo-hint" role="status"></p>
+    </form>
+
+    <div id="login-step-nomes" class="hidden">
+      <p>Quem é você?</p>
+      <div id="name-grid" class="name-grid"></div>
+    </div>
+
+    <div id="login-error" class="hidden">
+      <p class="hint error" id="login-error-msg"></p>
+      <button class="primary" type="button" data-action="reload">Tentar de novo</button>
+    </div>
+
+    <div id="install-banner" class="install-banner hidden"></div>
+  </div>
+
+  <!-- APP -->
+  <div id="screen-app" class="hidden">
+    <header class="topbar">
+      <div class="who">
+        <span class="who-badge">
+          <svg viewBox="0 0 48 48" fill="none" aria-hidden="true">
+            <path d="M20 7 L27 19 L18 22 L28 41" stroke="#fff" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <span>Olá, <span id="who-name"></span><span class="who-sub">Divisão de contas</span></span>
+      </div>
+      <div class="topbar-right">
+        <label for="grupo-switcher" class="visually-hidden">Grupo</label>
+        <select id="grupo-switcher" data-change="onGrupoSwitch"></select>
+        <button class="icon-btn" type="button" data-action="refresh" aria-label="Atualizar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+        </button>
+        <button class="icon-btn" type="button" data-action="logout" aria-label="Sair">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 16l-4-4 4-4"/><path d="M6 12h10"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <section id="tab-dashboard"></section>
+      <section id="tab-despesa" class="hidden"></section>
+      <section id="tab-compra" class="hidden"></section>
+      <section id="tab-pagamento" class="hidden"></section>
+      <section id="tab-historico" class="hidden"></section>
+    </main>
+
+    <nav class="tabbar" aria-label="Navegação">
+      <button type="button" data-tab="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5 12 4l8 7.5"/><path d="M6.5 10v9a1 1 0 0 0 1 1H10v-6h4v6h2.5a1 1 0 0 0 1-1v-9"/></svg>
+        Início
+      </button>
+      <button type="button" data-tab="despesa">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+        Despesa
+      </button>
+      <button type="button" data-tab="compra">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M2 10h20"/><path d="M6 15h4"/></svg>
+        Parcelada
+      </button>
+      <button type="button" data-tab="pagamento">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="3"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9v.01M18 9v.01M6 15v.01M18 15v.01"/></svg>
+        Pagar
+      </button>
+      <button type="button" data-tab="historico">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+        Histórico
+      </button>
+    </nav>
+  </div>
+
+  <div id="offline-bar" class="offline-bar hidden" role="status">Sem internet — os dados podem estar desatualizados</div>
+  <div id="toast" role="status" aria-live="polite"></div>
+</div>
+
+<script src="config.js"></script>
+<script src="vendor/chart.umd.min.js" defer></script>
+<script src="js/api.js" defer></script>
+<script src="js/app.js" defer></script>
+</body>
+</html>
