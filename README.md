@@ -39,7 +39,7 @@ No plano Spark não existe Cloud Functions, então:
 2. Aba **Método de login** → **E-mail/senha** → ative só a primeira chave (**E-mail/senha**) → Salvar.
    A opção "Link do e-mail (login sem senha)" fica **desligada**: no plano Spark ela só permite
    5 emails por dia no projeto todo.
-3. Aba **Configurações > Domínios autorizados** → **Adicionar domínio** → `rachae-brown.vercel.app`
+3. Aba **Configurações > Domínios autorizados** → **Adicionar domínio** → `apprachae.vercel.app`
    (o `localhost` já vem na lista).
 4. Opcional: **Modelos** (templates) → **Redefinição de senha** → idioma português.
 
@@ -72,7 +72,7 @@ de convite** de novo.
 ## Proteção extra (recomendado)
 - **Restringir a chave da API ao seu site:** no [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
   (mesmo projeto) → chave "Browser key" → **Restrições de aplicativo: Referenciadores HTTP** →
-  adicione `https://rachae-brown.vercel.app/*` e `http://localhost:5173/*`.
+  adicione `https://apprachae.vercel.app/*` e `http://localhost:5173/*`.
 - **Alerta de uso:** o plano Spark não cobra nada; se passar da cota diária (50 mil leituras,
   20 mil gravações), o Firestore só recusa até o dia seguinte.
 
