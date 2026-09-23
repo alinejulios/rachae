@@ -9,7 +9,8 @@
  * Parcelas, Saldos, Resumo Mensal e Dashboard_Data — com fórmulas, listas e
  * validações. Depois é só preencher Config!B5:B9 (nomes) e C5:C9 (emails).
  *
- * Não apaga nada: se a aba Config já existir, a função para sem mexer.
+ * Não apaga nada e pode ser rodada de novo: cada aba que já existe é
+ * mantida como está (útil se uma execução anterior parou no meio).
  */
 
 const HDR_BG_ = '#2E75B6', TITLE_BG_ = '#1F4E78', INPUT_BG_ = '#FFF2CC', GROUP_BG_ = '#BDD7EE';
@@ -17,20 +18,25 @@ const METODOS_ = ['Igual', 'Porcentagem', 'Valor customizado'];
 
 function criarPlanilhaDoZero() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss.getSheetByName(SHEET_CONFIG)) {
-    Logger.log('A aba Config já existe — esta planilha já tem estrutura. Nada foi alterado.');
+  if (ss.getSheetByName(SHEET_SALDOS)) {
+    Logger.log('Esta planilha já tem a estrutura completa (a aba Saldos existe). Nada foi alterado.');
     return;
   }
   Logger.log('Criando a estrutura do Rachaê...');
 
-  const cfg = setupConfig_(ss);
-  const grupos = setupGrupos_(ss, cfg);
-  setupDespesas_(ss, cfg, grupos);
-  setupCompras_(ss, cfg, grupos);
-  setupPagamentos_(ss);
-  rebuildSaldos_(ss);
+  const existe = nome => {
+    const sh = ss.getSheetByName(nome);
+    if (sh) Logger.log('Aba "' + nome + '" já existe — mantida como está.');
+    return sh;
+  };
+  const cfg = existe(SHEET_CONFIG) || setupConfig_(ss);
+  const grupos = existe(SHEET_GRUPOS) || setupGrupos_(ss, cfg);
+  existe(SHEET_DESPESAS) || setupDespesas_(ss, cfg, grupos);
+  existe(SHEET_COMPRAS) || setupCompras_(ss, cfg, grupos);
+  existe(SHEET_PAGAMENTOS) || setupPagamentos_(ss);
   rebuildResumoMensal_(ss);
   rebuildDashboardData_(ss);
+  rebuildSaldos_(ss); // por último: é o marcador de "estrutura completa"
 
   // Remove a aba em branco padrão ("Página1"/"Sheet1"), se estiver vazia
   ss.getSheets().forEach(sh => {
@@ -221,7 +227,6 @@ function setupDespesas_(ss, cfg, grupos) {
   sh.setColumnWidth(D_DESC, 200);
   sh.setColumnWidth(D_CAT, 150);
   sh.setFrozenRows(2);
-  sh.setFrozenColumns(2);
 }
 
 // ---------------------------------------------------------------- Compras Parceladas
@@ -315,7 +320,6 @@ function setupCompras_(ss, cfg, grupos) {
   sh.setColumnWidth(C_ID, 70);
   sh.setColumnWidth(C_DESC, 200);
   sh.setFrozenRows(2);
-  sh.setFrozenColumns(3);
 }
 
 // ---------------------------------------------------------------- Pagamentos Parcelas
