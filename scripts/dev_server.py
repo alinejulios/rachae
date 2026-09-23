@@ -26,7 +26,7 @@ CONFIG = {
     "names": NAMES,
     "categorias": ["Aluguel", "Mercado/Supermercado", "Lazer", "Transporte", "Streaming",
                    "Contas de Consumo", "Saúde", "Pet", "Viagem", "Alimentação", "Outros"],
-    "metodos": ["Igual", "Porcentagem", "Valor"],
+    "metodos": ["Igual", "Porcentagem", "Valor customizado"],
     "segmentos": ["Mensais", "À Vista"],
     "emailsConfigured": True,
 }

@@ -31,16 +31,22 @@ Abra http://localhost:5173. Login: `aline@exemplo.com` e código `123456`.
 Para testar no celular, na mesma rede Wi-Fi: `http://IP-DO-SEU-MAC:5173`
 (o service worker e a instalação só funcionam de verdade em HTTPS — veja o passo 4).
 
-## 2. Publicar a API no Apps Script
+## 2. Preparar a planilha e publicar a API no Apps Script
 
 1. Abra a planilha → **Extensões > Apps Script**.
-2. Clique em **+ > Script**, dê o nome **Api** e cole o conteúdo de `apps-script/Api.gs`.
-   O `Code.gs` e o `Index` que já estão lá continuam iguais.
-3. **Implantar > Gerenciar implantações** → lápis → Versão: **Nova versão** → Implantar.
+2. Crie (ou substitua) três arquivos de script, colando o conteúdo de cada um:
+   `Code.gs`, **`Api`** (de `apps-script/Api.gs`) e **`Setup`** (de `apps-script/Setup.gs`).
+3. **Planilha vazia?** No menu de funções, escolha **`criarPlanilhaDoZero`** e clique em
+   Executar. Ela monta todas as abas (Config, Grupos, Despesas, Compras Parceladas,
+   Pagamentos Parcelas, Saldos, Resumo Mensal, Dashboard_Data) e não mexe em nada se a
+   aba Config já existir. Depois preencha **Config!B5:B9** (nomes) e **C5:C9** (emails).
+   O grupo **Casa** inclui automaticamente todo mundo cadastrado.
+4. **Implantar > Nova implantação** (ou, se já existir, Gerenciar implantações → lápis →
+   Versão: **Nova versão**) → tipo **App da Web** → Implantar.
    - Executar como: **Eu**
    - Quem pode acessar: **Qualquer pessoa** (obrigatório: a opção "qualquer pessoa com Conta do
      Google" exige cookies do Google e o navegador bloqueia a chamada vinda de outro site).
-4. Copie a URL do App da Web (termina em `/exec`). A URL antiga continua abrindo a interface
+5. Copie a URL do App da Web (termina em `/exec`). A URL antiga continua abrindo a interface
    antiga, então as duas convivem enquanto vocês testam.
 
 > A segurança não depende de a URL ser secreta: toda leitura/gravação exige o token de sessão
