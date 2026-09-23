@@ -108,6 +108,8 @@ ACTIONS.reload = () => location.reload();
 async function init() {
   $('login-step-email').dataset.submit = 'submitEmailLogin';
   $('login-step-code').dataset.submit = 'submitCodigo';
+  $('login-step-cadastro').dataset.submit = 'submitCadastro';
+  lerConviteDaUrl();
   updateOnlineStatus();
   window.addEventListener('online', updateOnlineStatus);
   window.addEventListener('offline', updateOnlineStatus);
@@ -146,13 +148,22 @@ function showLoginStep() {
   document.body.classList.add('on-login');
   $('screen-app').classList.add('hidden');
   $('screen-login').classList.remove('hidden');
-  ['login-step-loading', 'login-step-code', 'login-step-email', 'login-step-nomes', 'login-error']
+  ['login-step-loading', 'login-step-code', 'login-step-email', 'login-step-cadastro', 'login-step-nomes', 'login-error']
     .forEach(id => $(id).classList.add('hidden'));
   $('login-codigo').value = '';
+  clearInterval(RESEND_TIMER);
+  LOGIN_MODO = 'login';
 
   const config = STATE.config;
-  if (config.emailsConfigured) {
-    $('login-step-email').classList.remove('hidden');
+  const podeCadastrar = !!config.cadastroAberto && config.vagas > 0;
+  $('cadastro-link').classList.toggle('hidden', !podeCadastrar);
+  if (config.emailsConfigured || config.cadastroAberto) {
+    // Chegou por um link de convite: abre direto o cadastro
+    if (podeCadastrar && CONVITE_URL) ACTIONS.irParaCadastro();
+    else $('login-step-email').classList.remove('hidden');
+  } else if (!config.names.length) {
+    $('login-error').classList.remove('hidden');
+    $('login-error-msg').textContent = 'Ninguém cadastrado ainda. Quem administra a planilha precisa rodar gerarCodigoConvite no Apps Script.';
   } else {
     $('login-step-nomes').classList.remove('hidden');
     $('name-grid').innerHTML = config.names.map(nome =>
@@ -179,6 +190,30 @@ ACTIONS.loginPorNome = async el => {
 // ---------- Login por email (código de verificação) ----------
 let LOGIN_EMAIL_ATUAL = '';
 let RESEND_TIMER = null;
+let LOGIN_MODO = 'login'; // 'login' ou 'cadastro' — define o que o código de 6 dígitos confirma
+let CONVITE_URL = '';
+
+// Link de convite: https://.../?convite=ABCD2345 preenche o código sozinho
+function lerConviteDaUrl() {
+  try {
+    const url = new URL(location.href);
+    const c = url.searchParams.get('convite');
+    if (!c) return;
+    CONVITE_URL = c.trim().toUpperCase();
+    url.searchParams.delete('convite');
+    history.replaceState(null, '', url.pathname + url.search + url.hash);
+  } catch (e) {}
+}
+function mostrarPassoCodigo(email) {
+  $('login-email-shown').textContent = email;
+  $('login-codigo-hint').textContent = '';
+  $('login-codigo').value = '';
+  $('login-step-email').classList.add('hidden');
+  $('login-step-cadastro').classList.add('hidden');
+  $('login-step-code').classList.remove('hidden');
+  $('login-codigo').focus();
+  startResendCooldown();
+}
 
 ACTIONS.submitEmailLogin = async form => {
   const email = $('login-email').value.trim();
@@ -191,13 +226,8 @@ ACTIONS.submitEmailLogin = async form => {
     try {
       await api('iniciarLogin', { email });
       hint.textContent = '';
-      $('login-email-shown').textContent = email;
-      $('login-codigo-hint').textContent = '';
-      $('login-codigo').value = '';
-      $('login-step-email').classList.add('hidden');
-      $('login-step-code').classList.remove('hidden');
-      $('login-codigo').focus();
-      startResendCooldown();
+      LOGIN_MODO = 'login';
+      mostrarPassoCodigo(email);
     } catch (err) {
       hint.textContent = err.message; hint.className = 'hint error';
     }
@@ -211,9 +241,16 @@ ACTIONS.submitCodigo = async form => {
   hint.className = 'hint';
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      const res = await api('confirmarCodigo', { email: LOGIN_EMAIL_ATUAL, codigo });
+      const res = await api(LOGIN_MODO === 'cadastro' ? 'confirmarCadastro' : 'confirmarCodigo',
+        { email: LOGIN_EMAIL_ATUAL, codigo });
       setToken(res.token);
       clearInterval(RESEND_TIMER);
+      if (LOGIN_MODO === 'cadastro') {
+        // A lista de pessoas mudou: recarrega a Config antes de entrar
+        try { STATE.config = await api('config'); store.set(K.config, STATE.config); } catch (e) {}
+        CONVITE_URL = '';
+        showToast('Cadastro feito! Bem-vinda(o), ' + res.nome + '.');
+      }
       enterApp(res.nome);
     } catch (err) {
       hint.textContent = err.message; hint.className = 'hint error';
@@ -229,8 +266,42 @@ $('login-codigo').addEventListener('input', e => {
 });
 ACTIONS.voltarParaEmail = () => {
   clearInterval(RESEND_TIMER);
+  LOGIN_MODO = 'login';
   $('login-step-code').classList.add('hidden');
+  $('login-step-cadastro').classList.add('hidden');
   $('login-step-email').classList.remove('hidden');
+};
+ACTIONS.irParaCadastro = () => {
+  clearInterval(RESEND_TIMER);
+  $('login-step-email').classList.add('hidden');
+  $('login-step-code').classList.add('hidden');
+  $('login-step-cadastro').classList.remove('hidden');
+  $('cad-hint').textContent = '';
+  if (CONVITE_URL && !$('cad-convite').value) $('cad-convite').value = CONVITE_URL;
+  if (!$('cad-email').value && $('login-email').value) $('cad-email').value = $('login-email').value.trim();
+};
+ACTIONS.submitCadastro = async form => {
+  const nome = $('cad-nome').value.trim().replace(/\s+/g, ' ');
+  const email = $('cad-email').value.trim();
+  const convite = $('cad-convite').value.trim();
+  const hint = $('cad-hint');
+  const erro = !nome ? 'Digite seu nome.'
+    : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? 'Digite um email válido.'
+    : !convite ? 'Digite o código de convite.' : null;
+  if (erro) { hint.textContent = erro; hint.className = 'hint error'; vibrate(60); return; }
+  hint.textContent = 'Enviando código...';
+  hint.className = 'hint';
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      await api('iniciarCadastro', { nome, email, convite });
+      hint.textContent = '';
+      LOGIN_EMAIL_ATUAL = email;
+      LOGIN_MODO = 'cadastro';
+      mostrarPassoCodigo(email);
+    } catch (err) {
+      hint.textContent = err.message; hint.className = 'hint error';
+    }
+  });
 };
 function startResendCooldown() {
   const btn = $('resend-btn');
@@ -244,7 +315,9 @@ function startResendCooldown() {
     else btn.textContent = 'Reenviar (' + s + 's)';
   }, 1000);
 }
-ACTIONS.reenviarCodigo = () => ACTIONS.submitEmailLogin($('login-step-email'));
+ACTIONS.reenviarCodigo = () => (LOGIN_MODO === 'cadastro'
+  ? ACTIONS.submitCadastro($('login-step-cadastro'))
+  : ACTIONS.submitEmailLogin($('login-step-email')));
 
 // ---------- Sessão ----------
 function enterApp(nome, opts = {}) {

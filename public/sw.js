@@ -3,7 +3,7 @@
 // as chamadas à API vão direto para o Google (outra origem, método POST).
 //
 // Ao publicar uma versão nova do front, aumente CACHE_VERSION.
-const CACHE_VERSION = 'rachae-v1';
+const CACHE_VERSION = 'rachae-v2';
 const APP_SHELL = [
   './',
   'index.html',

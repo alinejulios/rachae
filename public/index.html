@@ -47,6 +47,27 @@
              autocomplete="email" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="send">
       <button class="primary" type="submit">Enviar código</button>
       <p class="hint" id="login-email-hint" role="status"></p>
+      <div class="login-links hidden" id="cadastro-link">
+        <button type="button" class="link-btn" data-action="irParaCadastro">Primeiro acesso? Cadastre-se</button>
+      </div>
+    </form>
+
+    <form id="login-step-cadastro" class="hidden" novalidate>
+      <p>Crie seu acesso com o código de convite que você recebeu.</p>
+      <label for="cad-nome" class="field-label">Seu nome (como vai aparecer para a casa)</label>
+      <input type="text" id="cad-nome" maxlength="20" placeholder="Ex.: Aline"
+             autocomplete="given-name" autocapitalize="words" enterkeyhint="next">
+      <label for="cad-email" class="field-label">Email</label>
+      <input type="email" id="cad-email" placeholder="seuemail@exemplo.com"
+             autocomplete="email" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="next">
+      <label for="cad-convite" class="field-label">Código de convite</label>
+      <input type="text" id="cad-convite" placeholder="ABCD2345" maxlength="20"
+             autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="send">
+      <button class="primary" type="submit">Enviar código de confirmação</button>
+      <p class="hint" id="cad-hint" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="voltarParaEmail">Já tenho cadastro</button>
+      </div>
     </form>
 
     <form id="login-step-code" class="hidden" novalidate>

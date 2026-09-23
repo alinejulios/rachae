@@ -6,6 +6,7 @@ para testar o layout no navegador/celular sem mexer na planilha real.
 Uso:  python3 scripts/dev_server.py [porta]
 Depois abra http://localhost:5173 (ou, no celular na mesma rede Wi-Fi,
 http://IP-DO-MAC:5173). Login: qualquer email da lista abaixo, código 123456.
+Cadastro: convite CASA2026, código 123456.
 """
 import json
 import sys
@@ -30,6 +31,8 @@ CONFIG = {
     "segmentos": ["Mensais", "À Vista"],
     "emailsConfigured": True,
 }
+CONVITE = "CASA2026"  # código de convite da API falsa
+PENDENTES = {}
 SESSIONS = {}
 DESPESAS = [
     {"row": 3, "data": "02/09/2026", "descricao": "Aluguel setembro", "categoria": "Aluguel", "segmento": "Mensais",
@@ -71,11 +74,35 @@ def dashboard(nome, grupo):
 def handle(req):
     action = req.get("action")
     sess = SESSIONS.get(req.get("token"))
-    public = {"config", "iniciarLogin", "confirmarCodigo", "loginPorNome"}
+    public = {"config", "iniciarLogin", "confirmarCodigo", "loginPorNome", "iniciarCadastro", "confirmarCadastro"}
     if action not in public and not sess:
         return {"ok": False, "error": "Sessão expirada. Entre novamente.", "code": "AUTH"}
     if action == "config":
-        return {"ok": True, "data": CONFIG}
+        return {"ok": True, "data": {**CONFIG, "cadastroAberto": True, "vagas": 5 - len(NAMES)}}
+    if action == "iniciarCadastro":
+        email = req.get("email", "").strip().lower()
+        if req.get("convite", "").strip().upper() != CONVITE:
+            return {"ok": False, "error": "Código de convite inválido."}
+        if email in EMAILS:
+            return {"ok": False, "error": 'Esse email já está cadastrado. Use "Já tenho cadastro" para entrar.'}
+        if req.get("nome", "").lower() in [n.lower() for n in NAMES]:
+            return {"ok": False, "error": "Já existe alguém com esse nome."}
+        if len(NAMES) >= 5:
+            return {"ok": False, "error": "A casa já tem 5 pessoas cadastradas."}
+        PENDENTES[email] = req["nome"].strip()
+        return {"ok": True, "data": {"ok": True}}
+    if action == "confirmarCadastro":
+        email = req.get("email", "").strip().lower()
+        if email not in PENDENTES:
+            return {"ok": False, "error": "Código expirado ou não solicitado."}
+        if req.get("codigo") != "123456":
+            return {"ok": False, "error": "Código incorreto. Confira e tente novamente."}
+        nome = PENDENTES.pop(email)
+        NAMES.append(nome)
+        EMAILS[email] = nome
+        token = f"tok-{len(SESSIONS) + 1}"
+        SESSIONS[token] = nome
+        return {"ok": True, "data": {"nome": nome, "token": token}}
     if action == "iniciarLogin":
         if req.get("email", "").strip().lower() not in EMAILS:
             return {"ok": False, "error": "Esse email não está cadastrado."}

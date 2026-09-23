@@ -108,6 +108,10 @@ button, a, select, input, label { touch-action: manipulation; }
 #screen-login p { color: var(--text-secondary); font-size: 15px; margin: 0 0 24px; }
 #screen-login p.hint { margin: 10px 0 0; font-size: 13px; }
 #screen-login input { text-align: center; font-size: 18px; }
+#login-step-cadastro { text-align: left; }
+#login-step-cadastro > p { text-align: center; }
+#login-step-cadastro input { text-align: left; }
+#cad-convite { text-transform: uppercase; letter-spacing: 2px; font-weight: 700; }
 #screen-login #login-codigo { letter-spacing: 6px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .name-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .name-btn {

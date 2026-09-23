@@ -51,9 +51,10 @@ function criarPlanilhaDoZero() {
       ss.deleteSheet(sh);
     }
   });
+  if (!String(cfg.getRange('B45').getValue() || '').trim()) gerarCodigoConvite();
   ss.setActiveSheet(cfg);
   SpreadsheetApp.flush();
-  Logger.log('Pronto! Agora preencha na aba Config os nomes (B5:B9) e os emails (C5:C9) de quem mora na casa.');
+  Logger.log('Pronto! Mande o código de convite (Config!B45) para os moradores se cadastrarem pelo app.');
 }
 
 // ---------------------------------------------------------------- helpers
