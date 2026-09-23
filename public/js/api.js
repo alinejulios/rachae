@@ -50,6 +50,9 @@ const ERROS = {
   'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
   'auth/too-many-requests': 'Muitas tentativas. Espere alguns minutos e tente de novo.',
   'auth/network-request-failed': 'Sem conexão com a internet.',
+  'auth/configuration-not-found': 'O login ainda não foi ativado no Firebase (Authentication > Método de login > E-mail/senha).',
+  'auth/operation-not-allowed': 'O login por email e senha está desativado no Firebase (Authentication > Método de login).',
+  'auth/unauthorized-domain': 'Este endereço não está autorizado no Firebase (Authentication > Configurações > Domínios autorizados).',
   'permission-denied': 'Sem permissão para isso.',
   'unavailable': 'Sem conexão com o servidor. Tente de novo.'
 };
