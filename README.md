@@ -17,7 +17,8 @@ celular (PWA, Vercel) ──SDK──▶ Firebase Auth (email + senha)
   todo mundo ou só parte das pessoas, e os saldos são calculados por conjunto.
 - **Pessoal (só você)**: opção marcada ao criar o grupo. Cada pessoa ganha um conjunto privado para
   acompanhar os próprios gastos — ninguém mais vê (nem quem administra) e não entra na divisão.
-  Aceita despesas e **compras parceladas**: cada parcela entra no painel no mês em que vence.
+  Aceita despesas e **compras parceladas**: cada parcela entra no painel no mês em que vence
+  (com a opção "1ª parcela só no mês seguinte", para quando a compra cai na fatura seguinte).
 
 No banco, grupo = coleção `households` e conjunto = `households/{id}/grupos` (nomes da primeira
 versão, mantidos para não migrar dados); despesas pessoais ficam em `households/{id}/pessoais/{uid}/despesas` e `.../compras`.

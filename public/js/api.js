@@ -481,7 +481,8 @@ const ACOES = {
       const ref = await addDoc(collection(fs, 'households', CASA.id, 'pessoais', usuarioAtual().uid, 'compras'), {
         data: dataOk(payload.data), descricao: String(payload.descricao).trim().slice(0, 80),
         categoria: payload.categoria, valor: centavos(payload.valorTotal),
-        nParcelas: Math.max(1, Math.min(60, parseInt(payload.nParcelas, 10) || 1)), criadoEm: serverTimestamp()
+        nParcelas: Math.max(1, Math.min(60, parseInt(payload.nParcelas, 10) || 1)),
+        parcelaSeguinte: !!payload.parcelaSeguinte, criadoEm: serverTimestamp()
       });
       return { ok: true, id: 'pc:' + ref.id };
     }
@@ -491,7 +492,7 @@ const ACOES = {
       categoria: payload.categoria, grupoId: g.id, valor: centavos(payload.valorTotal),
       comprador: uidPorNome(payload.comprador), nParcelas: Math.max(1, Math.min(60, parseInt(payload.nParcelas, 10) || 1)),
       metodo: payload.metodo, participantes: payload.participantes.map(uidPorNome), divisao: divisaoParaUids(payload),
-      criadoPor: usuarioAtual().uid, criadoEm: serverTimestamp()
+      parcelaSeguinte: !!payload.parcelaSeguinte, criadoPor: usuarioAtual().uid, criadoEm: serverTimestamp()
     });
     return { ok: true, id: 'CP-' + ref.id.slice(0, 5).toUpperCase() };
   },

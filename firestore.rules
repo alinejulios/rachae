@@ -166,7 +166,8 @@ service cloud.firestore {
         allow read: if isMember(hid);
         allow create: if isMember(hid)
           && request.resource.data.keys().hasOnly(['data', 'descricao', 'categoria', 'grupoId', 'valor',
-               'comprador', 'nParcelas', 'metodo', 'participantes', 'divisao', 'criadoPor', 'criadoEm'])
+               'comprador', 'nParcelas', 'metodo', 'participantes', 'divisao', 'parcelaSeguinte', 'criadoPor', 'criadoEm'])
+          && request.resource.data.get('parcelaSeguinte', false) is bool
           && request.resource.data.criadoPor == uid()
           && dataISO(request.resource.data.data)
           && str(request.resource.data.descricao, 1, 80)
@@ -201,7 +202,8 @@ service cloud.firestore {
         allow read, delete: if signedIn() && uid() == donoId;
         allow create: if isMember(hid) && uid() == donoId
           && get(casa(hid)).data.get('despesasPessoais', false) == true
-          && request.resource.data.keys().hasOnly(['data', 'descricao', 'categoria', 'valor', 'nParcelas', 'criadoEm'])
+          && request.resource.data.keys().hasOnly(['data', 'descricao', 'categoria', 'valor', 'nParcelas', 'parcelaSeguinte', 'criadoEm'])
+          && request.resource.data.get('parcelaSeguinte', false) is bool
           && dataISO(request.resource.data.data)
           && str(request.resource.data.descricao, 1, 80)
           && str(request.resource.data.categoria, 1, 40)

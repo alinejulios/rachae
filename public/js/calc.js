@@ -255,12 +255,16 @@ const somaMeses = (mesISO, n) => {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 };
 
-/** Parcelas de uma compra: [{ mes: 'aaaa-mm', valor: centavos, num }] — centavos que sobram vão nas primeiras. */
+/**
+ * Parcelas de uma compra: [{ mes: 'aaaa-mm', valor: centavos, num }] — centavos que sobram vão nas primeiras.
+ * Com `parcelaSeguinte`, a 1ª parcela cai no mês seguinte ao da compra (fatura seguinte do cartão).
+ */
 export function parcelasDaCompra(compra) {
   const n = Math.max(1, compra.nParcelas || 1);
   const base = Math.floor(compra.valor / n);
   let resto = compra.valor - base * n;
-  const mes0 = String(compra.data || '').slice(0, 7);
+  const mesCompra = String(compra.data || '').slice(0, 7);
+  const mes0 = compra.parcelaSeguinte ? somaMeses(mesCompra, 1) : mesCompra;
   const out = [];
   for (let i = 0; i < n; i++) {
     out.push({ mes: somaMeses(mes0, i), valor: base + (resto > 0 ? 1 : 0), num: i + 1 });

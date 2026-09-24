@@ -31,7 +31,8 @@ const K = {
   config: 'rachae_cache_config',
   grupos: 'rachae_cache_grupos',
   tags: 'rachae_tags',
-  installDismissed: 'rachae_install_dismissed'
+  installDismissed: 'rachae_install_dismissed',
+  parcelaSeguinte: 'rachae_parcela_seguinte'
 };
 
 // ---------- Utilidades ----------
@@ -855,7 +856,11 @@ function renderCompraForm() {
       <input type="text" id="compra-nparc" value="1" inputmode="numeric" pattern="[0-9]*" data-input="updateParcelaPreview">
       <p class="hint" id="compra-parcela-hint"></p>
       <label for="compra-data">Data da compra</label>
-      <input type="date" id="compra-data" value="${todayStr()}">
+      <input type="date" id="compra-data" value="${todayStr()}" data-change="updateParcelaPreview">
+      <label class="participa-item" style="margin-top:10px">
+        <input type="checkbox" id="compra-seguinte" data-change="updateParcelaPreview" ${store.get(K.parcelaSeguinte, false) ? 'checked' : ''}>
+        1ª parcela só no mês seguinte (fatura seguinte)
+      </label>
       <label for="compra-categoria">Categoria</label>
       <select id="compra-categoria">${optionsHtml(cfg.categorias)}</select>
       <label for="compra-grupo">Conjunto de despesas</label>
@@ -1053,7 +1058,7 @@ async function submitCompraPessoal(form) {
   if (erro) { showToast(erro, true); vibrate(60); return; }
   const payload = {
     grupo: PESSOAL, data: $('compra-data').value || todayStr(), descricao: $('compra-descricao').value.trim(),
-    categoria: $('compra-categoria').value, valorTotal, nParcelas
+    categoria: $('compra-categoria').value, valorTotal, nParcelas, parcelaSeguinte: $('compra-seguinte').checked
   };
   const tags = (TAG_DRAFTS['compra-tags-editor'] || []).slice();
   await withBusy(form.querySelector('button[type=submit]'), async () => {
@@ -1088,7 +1093,16 @@ async function submitDespesaPessoal(form) {
 ACTIONS.updateParcelaPreview = () => {
   const valor = parseMoney($('compra-valor').value) || 0;
   const n = parseInt($('compra-nparc').value, 10) || 0;
-  $('compra-parcela-hint').textContent = (valor > 0 && n > 0) ? n + 'x de ' + fmtBRL(valor / n) + ' no cartão de quem comprou' : '';
+  const seguinte = $('compra-seguinte') && $('compra-seguinte').checked;
+  store.set(K.parcelaSeguinte, !!seguinte); // lembra a preferência neste aparelho
+  const dataCompra = $('compra-data').value || todayStr();
+  const [a, m] = dataCompra.split('-').map(Number);
+  const primeira = new Date(a, m - 1 + (seguinte ? 1 : 0), 1);
+  const ultima = new Date(a, m - 1 + (seguinte ? 1 : 0) + Math.max(n, 1) - 1, 1);
+  const mesAno = d => MESES_ABREV[d.getMonth()].toLowerCase() + '/' + d.getFullYear();
+  $('compra-parcela-hint').textContent = (valor > 0 && n > 0)
+    ? n + 'x de ' + fmtBRL(valor / n) + ' · de ' + mesAno(primeira) + (n > 1 ? ' a ' + mesAno(ultima) : '')
+    : '';
   if ($('compra-metodo') && $('compra-metodo').value === 'Igual') renderDivisaoFields('compra');
   else updateDivisaoHint('compra');
 };
@@ -1109,6 +1123,7 @@ ACTIONS.submitCompra = async form => {
     valorTotal,
     comprador: $('compra-comprador').value,
     nParcelas,
+    parcelaSeguinte: $('compra-seguinte').checked,
     metodo,
     participantes,
     divisao: metodo === 'Igual' ? null : collectDivisao('compra', metodo === 'Porcentagem')
