@@ -191,6 +191,7 @@ function irParaLogin() {
 }
 async function goToLogin() {
   await Firebase.sair().catch(() => {});
+  GASTOS.dados = null;
   store.remove(K.pessoa);
   irParaLogin();
 }
@@ -320,7 +321,7 @@ async function atualizarAoVivo() {
     if (STATE.casa) $('who-casa').textContent = Firebase.casaAtual().nome;
     const saiuDaCasa = !meuNome;
     if (saiuDaCasa) { showToast('Você não faz mais parte deste grupo.', true); goToLogin(); return; }
-    if (['dashboard', 'historico', 'casa', 'grupos'].includes(STATE.currentTab)) refreshCurrentTabData();
+    if (['dashboard', 'historico', 'casa', 'grupos', 'gastos'].includes(STATE.currentTab)) refreshCurrentTabData();
   } catch (err) { /* sem conexão: tenta na próxima mudança */ }
 }
 
@@ -444,7 +445,7 @@ ACTIONS.removeDraftTag = el => {
 // =================================================================== Navegação
 function switchTab(tab, opts = {}) {
   STATE.currentTab = tab;
-  ['dashboard', 'despesa', 'compra', 'pagamento', 'historico', 'casa', 'grupos'].forEach(t => {
+  ['dashboard', 'despesa', 'compra', 'pagamento', 'historico', 'casa', 'grupos', 'gastos'].forEach(t => {
     $('tab-' + t).classList.toggle('hidden', t !== tab);
   });
   document.querySelectorAll('nav.tabbar button').forEach(b => {
@@ -461,6 +462,7 @@ function switchTab(tab, opts = {}) {
   if (tab === 'historico') loadHistorico();
   if (tab === 'casa') renderCasa();
   if (tab === 'grupos') renderMeusGrupos();
+  if (tab === 'gastos') renderMeusGastos();
 }
 
 // =================================================================== Dashboard
@@ -513,7 +515,6 @@ function renderDashboard(d) {
 
   el.innerHTML = `
     <div id="install-card"></div>
-    <div id="resumo-painel"></div>
     <div class="card hero">
       <div class="label">Seu saldo geral${h(grupoLabel)}</div>
       <div class="value ${statusClass}">${fmtBRL(Math.abs(p.saldoGeral))}</div>
@@ -581,7 +582,6 @@ function renderDashboard(d) {
   renderInstallCard();
   renderSaldoBars(d.saldosPorPessoa || []);
   renderSaldoMes(d);
-  mostrarResumoNoPainel();
   renderChartMensal();
   renderChartCategoriaMes();
   renderChartReembolsos(d.reembolsosPorPessoa || []);
@@ -708,15 +708,7 @@ function renderChartMensal() {
   if (!toggleChartEmpty('chart-mensal', 'chart-mensal-empty', semNada)) return;
   if (semNada) { hintEl.textContent = ''; return; }
 
-  // Meses que ainda não chegaram (parcelas a vencer) ficam em tom mais claro
-  const mesAtual = d.mesAtual || mesAtualKey();
-  const futuro = MESES_ABREV.map((_, i) => (ano + '-' + String(i + 1).padStart(2, '0')) > mesAtual);
-  const azul = cssVar('--brand-blue');
-  const datasets = [{
-    label: String(ano), data: atual, borderRadius: 4, maxBarThickness: 18,
-    backgroundColor: futuro.map(f => (f ? azul + '59' : azul)),
-    borderColor: azul, borderWidth: futuro.map(f => (f ? 1.5 : 0)), borderDash: [3, 3]
-  }];
+  const datasets = [{ label: String(ano), data: atual, backgroundColor: cssVar('--brand-blue'), borderRadius: 4, maxBarThickness: 18 }];
   if (temAnoAnterior) {
     datasets.push({ label: String(ano - 1), data: anterior, backgroundColor: cssVar('--brand-aqua'), borderRadius: 4, maxBarThickness: 18 });
   }
@@ -727,7 +719,7 @@ function renderChartMensal() {
       ...baseChartOptions(),
       plugins: {
         legend: { display: temAnoAnterior, position: 'top', align: 'end', labels: { boxWidth: 12, font: { size: 12 }, color: cssVar('--text-secondary') } },
-        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + fmtBRL(c.raw) + (c.datasetIndex === 0 && futuro[c.dataIndex] ? ' (a vencer)' : '') } }
+        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + fmtBRL(c.raw) } }
       },
       scales: {
         y: { grid: { color: cssVar('--gridline') }, border: { display: false }, ticks: { callback: fmtBRLCurto, color: cssVar('--text-muted'), maxTicksLimit: 5 } },
@@ -736,7 +728,6 @@ function renderChartMensal() {
     }
   });
 
-  const totalFuturo = atual.filter((_, i) => futuro[i]).reduce((t, v) => t + v, 0);
   const periodoLabel = mesesConsiderados < 12 ? ' (' + MESES_ABREV[0] + '–' + MESES_ABREV[mesesConsiderados - 1] + ')' : '';
   if (temAnoAnterior) {
     const diff = totalAtual - totalAnterior;
@@ -748,7 +739,6 @@ function renderChartMensal() {
     hintEl.className = 'hint';
     hintEl.textContent = 'Total ' + ano + periodoLabel + ': ' + fmtBRL(totalAtual);
   }
-  if (totalFuturo > 0) hintEl.textContent += ' · Barras claras: ' + fmtBRL(totalFuturo) + ' em parcelas a vencer.';
 }
 
 function renderChartCategoriaMes() {
@@ -1713,10 +1703,7 @@ async function renderMeusGrupos() {
   const eu = Firebase.usuarioAtual();
   const casas = await Firebase.minhasCasas().catch(() => []);
   el.innerHTML = `
-    <h2 class="page-title">Perfil</h2>
-    <div class="card" id="resumo-perfil"><div class="spinner">Somando todos os grupos...</div></div>
-
-    <h2 class="page-title" style="margin-top:22px">Meus grupos</h2>
+    <h2 class="page-title">Meus grupos</h2>
     <p class="page-sub">Toque num grupo para abrir. Os ajustes de cada grupo ficam na engrenagem ⚙️, dentro dele.</p>
     <div class="card">
       ${casas.map(c => `
@@ -1743,53 +1730,6 @@ async function renderMeusGrupos() {
     </div>
   `;
   if (OUTRA_CASA !== null) renderOutraCasaForm();
-  preencherResumo('resumo-perfil', true);
-}
-
-async function mostrarResumoNoPainel() {
-  const el = $('resumo-painel');
-  if (!el) return;
-  let grupos = [];
-  try { grupos = await Firebase.resumoGeral(); } catch (e) { return; }
-  const conjuntos = grupos.reduce((t, g) => t + g.conjuntos.length, 0);
-  if (conjuntos <= 1 || !$('resumo-painel')) return; // com um conjunto só, o saldo abaixo já é o total
-  el.classList.add('card');
-  preencherResumo('resumo-painel', false);
-}
-
-/** Soma de todos os grupos: o que devo e o que tenho a receber, com o detalhe por grupo e conjunto. */
-async function preencherResumo(id, detalhado) {
-  const el = $(id);
-  if (!el) return;
-  let grupos;
-  try { grupos = await Firebase.resumoGeral(); } catch (err) { el.innerHTML = `<p class="empty">${h(err.message)}</p>`; return; }
-  if (!$(id)) return;
-  const aPagar = grupos.reduce((t, g) => t + g.aPagar, 0);
-  const aReceber = grupos.reduce((t, g) => t + g.aReceber, 0);
-  const vencido = grupos.reduce((t, g) => t + g.conjuntos.reduce((x, c) => x + Math.min(0, c.vencido), 0), 0);
-  const topo = `
-    <div class="stat-row" style="margin-top:0">
-      <div class="stat-tile"><div class="l">Você deve (todos os grupos)</div><div class="resumo-num status-critical">${fmtBRL(aPagar)}</div></div>
-      <div class="stat-tile"><div class="l">Tem a receber</div><div class="resumo-num status-good">${fmtBRL(aReceber)}</div></div>
-    </div>
-    ${vencido < -0.004 ? `<p class="hint warn">${fmtBRL(-vencido)} disso já venceu (meses até ${MESES_LONGOS[new Date().getMonth()].toLowerCase()}); o resto são parcelas futuras.</p>` : ''}`;
-  if (!detalhado) {
-    el.innerHTML = `<h3>Em todos os seus grupos</h3>${topo}
-      <button type="button" class="link-btn" data-tab="grupos">Ver detalhes no Perfil</button>`;
-    return;
-  }
-  el.innerHTML = `<h3>Somando todos os seus grupos</h3>${topo}
-    ${grupos.map(g => `
-      <div class="resumo-grupo">
-        <div class="list-row"><strong>${h(g.nome)}</strong>
-          ${g.atual ? '<span class="sub">aberto</span>' : `<button type="button" class="del-btn" data-action="trocarCasa" data-id="${h(g.id)}">Abrir</button>`}</div>
-        ${g.conjuntos.length ? g.conjuntos.map(c => `
-          <div class="list-row sub-row"><span>${h(c.conjunto)}</span>
-            <span class="${c.saldo < -0.004 ? 'status-critical' : c.saldo > 0.004 ? 'status-good' : 'status-neutral'}">${
-              c.saldo < -0.004 ? 'deve ' + fmtBRL(-c.saldo) : c.saldo > 0.004 ? 'recebe ' + fmtBRL(c.saldo) : 'quitado'}</span></div>`).join('')
-          : '<div class="list-row sub-row"><span class="sub">Nenhum conjunto seu aqui</span></div>'}
-      </div>`).join('')}
-    <p class="hint">Cada grupo acerta separado: o que você recebe num não abate o que deve em outro.</p>`;
 }
 
 // ---------- Várias casas ----------
@@ -2000,6 +1940,150 @@ ACTIONS.compartilharConvite = async el => {
 ACTIONS.removerMembro = async el => {
   if (!confirm('Remover ' + el.dataset.nome + ' da casa? Os lançamentos dela continuam no histórico.')) return;
   try { await api('removerMembro', { uid: el.dataset.uid }); showToast('Pessoa removida.'); } catch (err) { onApiError(err); }
+};
+
+// =================================================================== Meus gastos (todos os grupos)
+const GASTOS = { grupo: 'todos', ano: null, mes: 'todos', dados: null };
+async function renderMeusGastos() {
+  const el = $('tab-gastos');
+  if (!GASTOS.dados) el.innerHTML = '<div class="spinner">Juntando os gastos de todos os seus grupos...</div>';
+  try { GASTOS.dados = await Firebase.meusGastos(); }
+  catch (err) { el.innerHTML = `<div class="card"><p class="empty">${h(err.message)}</p></div>`; return; }
+  if (STATE.currentTab !== 'gastos') return;
+  desenharMeusGastos();
+}
+function desenharMeusGastos() {
+  const el = $('tab-gastos');
+  const { grupos, itens } = GASTOS.dados;
+  const cores = categoriaCores(8);
+  const corDe = id => cores[Math.max(0, grupos.findIndex(g => g.id === id)) % cores.length];
+  if (GASTOS.grupo !== 'todos' && !grupos.some(g => g.id === GASTOS.grupo)) GASTOS.grupo = 'todos';
+
+  // Anos com gastos (sempre inclui o atual)
+  const anos = new Set([anoAtual()]);
+  itens.forEach(i => i.meses.forEach(m => anos.add(Number(m.mes.slice(0, 4)))));
+  const listaAnos = [...anos].sort((a, b) => b - a);
+  if (!GASTOS.ano || !anos.has(GASTOS.ano)) GASTOS.ano = anoAtual();
+  const prefixo = GASTOS.mes === 'todos' ? GASTOS.ano + '-' : GASTOS.ano + '-' + GASTOS.mes;
+
+  // Quanto de cada gasto cai no período escolhido (parcelas pessoais podem cair em vários meses)
+  const doGrupo = itens.filter(i => GASTOS.grupo === 'todos' || i.grupoId === GASTOS.grupo);
+  const noPeriodo = doGrupo.map(i => ({ ...i, valorPeriodo: i.meses.filter(m => m.mes.startsWith(prefixo)).reduce((t, m) => t + m.valor, 0) }))
+    .filter(i => i.valorPeriodo > 0);
+  const total = noPeriodo.reduce((t, i) => t + i.valorPeriodo, 0);
+  const porGrupo = grupos.map(g => ({ ...g, valor: noPeriodo.filter(i => i.grupoId === g.id).reduce((t, i) => t + i.valorPeriodo, 0) }))
+    .filter(g => g.valor > 0).sort((a, b) => b.valor - a.valor);
+  const periodo = GASTOS.mes === 'todos' ? String(GASTOS.ano) : MESES_LONGOS[Number(GASTOS.mes) - 1].toLowerCase() + ' de ' + GASTOS.ano;
+  const nomeFiltro = GASTOS.grupo === 'todos' ? 'todos os seus grupos' : (grupos.find(g => g.id === GASTOS.grupo) || {}).nome;
+
+  // Lista agrupada por mês
+  const porMes = {};
+  noPeriodo.forEach(i => {
+    const mes = GASTOS.mes === 'todos' ? String(i.data).slice(0, 7) : GASTOS.ano + '-' + GASTOS.mes;
+    (porMes[mes] = porMes[mes] || []).push(i);
+  });
+  const mesesLista = Object.keys(porMes).sort().reverse();
+  let mostrados = 0;
+
+  el.innerHTML = `
+    <h2 class="page-title">Meus gastos</h2>
+    <p class="page-sub">A sua parte em cada despesa, somando todos os grupos e as despesas pessoais. Acertos de contas não entram.</p>
+    <div class="filtros">
+      <select data-change="filtroGastos" data-campo="grupo" aria-label="Grupo">
+        <option value="todos">Todos os grupos</option>
+        ${grupos.map(g => `<option value="${h(g.id)}" ${g.id === GASTOS.grupo ? 'selected' : ''}>${h(g.nome)}</option>`).join('')}
+      </select>
+      <select data-change="filtroGastos" data-campo="ano" aria-label="Ano">
+        ${listaAnos.map(a => `<option value="${a}" ${a === GASTOS.ano ? 'selected' : ''}>${a}</option>`).join('')}
+      </select>
+      <select data-change="filtroGastos" data-campo="mes" aria-label="Mês">
+        <option value="todos">Ano todo</option>
+        ${MESES_ABREV.map((m, i) => { const v = String(i + 1).padStart(2, '0'); return `<option value="${v}" ${v === GASTOS.mes ? 'selected' : ''}>${m}</option>`; }).join('')}
+      </select>
+    </div>
+
+    <div class="card hero">
+      <div class="label">Seus gastos em ${h(periodo)} · ${h(nomeFiltro)}</div>
+      <div class="value">${fmtBRL(total)}</div>
+      <div class="status status-neutral">${noPeriodo.length} ${noPeriodo.length === 1 ? 'lançamento' : 'lançamentos'}</div>
+    </div>
+
+    ${porGrupo.length ? `
+    <div class="card">
+      <h3>Quanto em cada grupo</h3>
+      ${porGrupo.map(g => `
+        <div class="grupo-linha">
+          <span class="cor" style="background:${corDe(g.id)}"></span>
+          <span class="nome">${h(g.nome)}</span>
+          <span class="pct">${total > 0 ? Math.round(g.valor / total * 100) : 0}%</span>
+          <span class="val">${fmtBRL(g.valor)}</span>
+        </div>`).join('')}
+    </div>` : ''}
+
+    <div class="card">
+      <h3>Por mês em ${GASTOS.ano}</h3>
+      <div class="chart-box" style="height:240px"><canvas id="chart-meus-gastos"></canvas></div>
+      <p class="empty hidden" id="chart-meus-gastos-empty">Nenhum gasto seu em ${GASTOS.ano}.</p>
+    </div>
+
+    <div class="card">
+      <h3>Lançamentos</h3>
+      ${mesesLista.length ? mesesLista.map(mes => `
+        <div class="mes-titulo">${labelMes(mes)} · ${fmtBRL(porMes[mes].reduce((t, i) => t + i.valorPeriodo, 0))}</div>
+        ${porMes[mes].map(i => (++mostrados > 200) ? '' : `
+          <div class="hist-item">
+            <div class="top"><span>${h(i.descricao)}</span><span>${fmtBRL(i.valorPeriodo)}</span></div>
+            <div class="sub">${h(i.data.slice(8, 10) + '/' + i.data.slice(5, 7))} · <span style="color:${corDe(i.grupoId)};font-weight:800">${h(i.grupoNome)}</span>
+              · ${h(i.conjunto)} · ${h(i.categoria)} · ${h(i.tipo)}${i.total !== i.meuValor ? ' · sua parte de ' + fmtBRL(i.total) : ''}</div>
+          </div>`).join('')}`).join('')
+      : '<p class="empty">Nenhum gasto neste período.</p>'}
+    </div>
+  `;
+  desenharGraficoMeusGastos(doGrupo, grupos, corDe);
+}
+function desenharGraficoMeusGastos(itens, grupos, corDe) {
+  destroyChart('meusGastos');
+  if (!chartsReady()) return;
+  const ano = GASTOS.ano;
+  const mostrar = GASTOS.grupo === 'todos' ? grupos : grupos.filter(g => g.id === GASTOS.grupo);
+  const datasets = mostrar.map(g => {
+    const data = MESES_ABREV.map((_, i) => {
+      const mes = ano + '-' + String(i + 1).padStart(2, '0');
+      return itens.filter(x => x.grupoId === g.id).reduce((t, x) => t + x.meses.filter(m => m.mes === mes).reduce((s, m) => s + m.valor, 0), 0);
+    });
+    return { label: g.nome, data, backgroundColor: corDe(g.id), borderRadius: 3, maxBarThickness: 22, stack: 'gastos' };
+  }).filter(ds => ds.data.some(v => v > 0));
+  if (!toggleChartEmpty('chart-meus-gastos', 'chart-meus-gastos-empty', !datasets.length)) return;
+  if (!datasets.length) return;
+  STATE.charts.meusGastos = new Chart($('chart-meus-gastos'), {
+    type: 'bar',
+    data: { labels: MESES_ABREV, datasets },
+    options: {
+      ...baseChartOptions(),
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: datasets.length > 1, position: 'top', align: 'start', labels: { boxWidth: 12, font: { size: 12 }, color: cssVar('--text-secondary') } },
+        tooltip: { callbacks: {
+          label: c => c.dataset.label + ': ' + fmtBRL(c.raw),
+          footer: cs => cs.length > 1 ? 'Total: ' + fmtBRL(cs.reduce((t, c) => t + c.raw, 0)) : ''
+        } }
+      },
+      onClick: (ev, els) => {
+        if (!els.length) return;
+        GASTOS.mes = String(els[0].index + 1).padStart(2, '0');
+        desenharMeusGastos();
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { color: cssVar('--text-muted'), autoSkip: false, maxRotation: 0, font: { size: 10 } } },
+        y: { stacked: true, grid: { color: cssVar('--gridline') }, border: { display: false }, ticks: { callback: fmtBRLCurto, color: cssVar('--text-muted'), maxTicksLimit: 5 } }
+      }
+    }
+  });
+}
+ACTIONS.filtroGastos = el => {
+  const campo = el.dataset.campo;
+  GASTOS[campo] = campo === 'ano' ? Number(el.value) : el.value;
+  desenharMeusGastos();
 };
 
 // =================================================================== Instalação / PWA

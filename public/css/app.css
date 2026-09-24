@@ -214,7 +214,7 @@ nav.tabbar {
 }
 nav.tabbar button {
   flex: 1; min-height: 54px; background: none; border: none; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 3px; padding: 4px 2px; color: var(--text-muted); font-size: 11px; font-weight: 700; cursor: pointer; font-family: inherit;
+  gap: 3px; padding: 4px 1px; color: var(--text-muted); font-size: 10.5px; font-weight: 700; cursor: pointer; font-family: inherit; white-space: nowrap;
 }
 nav.tabbar button.active { color: var(--brand-blue); }
 nav.tabbar svg { width: 23px; height: 23px; }
@@ -399,3 +399,15 @@ body.on-login #toast { bottom: calc(24px + var(--safe-bottom)); }
 .resumo-grupo .list-row { border-bottom: none; padding: 6px 0; }
 .sub-row { padding-left: 12px !important; font-size: 14px; }
 .pendencias { margin-top: 12px; }
+
+/* ---------- Meus gastos ---------- */
+.filtros { display: grid; grid-template-columns: 1.7fr 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.filtros select { font-size: 16px; padding: 9px 28px 9px 10px; min-height: 42px; }
+.grupo-linha { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--gridline); font-size: 14.5px; }
+.grupo-linha:last-child { border-bottom: none; }
+.grupo-linha .cor { width: 12px; height: 12px; border-radius: 4px; flex-shrink: 0; }
+.grupo-linha .nome { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.grupo-linha .pct { color: var(--text-muted); font-size: 12.5px; width: 42px; text-align: right; }
+.grupo-linha .val { font-weight: 800; font-variant-numeric: tabular-nums; min-width: 92px; text-align: right; }
+.mes-titulo { font-family: var(--font-display); font-weight: 600; color: var(--text-secondary); margin: 14px 0 2px; font-size: 14px; }
+.mes-titulo:first-child { margin-top: 0; }

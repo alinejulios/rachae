@@ -120,10 +120,9 @@ ser conferidos sem Firebase, direto no Node, importando `public/js/calc.js`.
 - **Saldo do mês e acerto mensal:** além do saldo total, cada conjunto mostra o saldo de cada mês
   (despesas do mês, parcelas que vencem no mês e pagamentos do mês). Cada Pix marcado como pago
   abate o saldo total e o do mês de referência escolhido.
-- **Perfil com a soma de todos os grupos:** quanto você deve e tem a receber em cada grupo e conjunto
-  (toque no nome do grupo, no topo). O painel mostra um resumo quando você tem mais de um conjunto.
-- **Gastos futuros nos gráficos:** compras parceladas entram parcela a parcela, no mês em que vencem;
-  meses futuros aparecem em tom mais claro.
+- **Meus gastos** (menu de baixo): tudo o que é seu em todos os grupos — a sua parte em cada despesa
+  e compra compartilhada e as despesas pessoais —, com total, quanto em cada grupo, gráfico por mês
+  (barras empilhadas por grupo; toque num mês para ver só ele) e filtro por grupo, ano e mês.
 - **Adiantar parcelas e pagar atrasados:** na aba Pagar, cada parcela mostra se está paga, atrasada,
   vence este mês ou a vencer; o pagamento abate da mais antiga para a mais nova (pagar a mais adianta).
   No Pessoal, "Adiantar parcelas" traz as últimas parcelas para o mês atual. Em "Acertar as contas",

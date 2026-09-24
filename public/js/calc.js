@@ -92,7 +92,7 @@ export function montarDashboard(db, meUid, grupoId) {
   const reemb = {};
   membrosG.forEach(u => { reemb[u] = 0; });
   comprasGrupo.forEach(c => {
-    parcelasDaCompra(c).forEach(p => acumula(c.categoria, p.valor, p.mes + '-01'));
+    acumula(c.categoria, c.valor, c.data);
     const s = situacaoCompra(c, membrosG, db.pagamentos);
     Object.keys(s.impacto).forEach(u => { if (u in parc) parc[u] += s.impacto[u]; });
     if ((s.deve[meUid] || 0) > 1) {
@@ -361,18 +361,46 @@ export function montarHistoricoPessoal(despesas, compras = []) {
 }
 
 /**
- * Meu saldo em cada conjunto de um grupo (para o resumo do Perfil).
- * @returns {{conjunto:string, saldo:number, vencido:number}[]} reais; só conjuntos dos quais faço parte
+ * "Meus gastos": tudo o que é da pessoa, em todos os grupos — a PARTE dela em cada despesa
+ * e compra compartilhada (não o valor total) e as despesas pessoais inteiras. Acertos de
+ * contas não são gasto e ficam de fora.
+ * Compras compartilhadas contam no mês da compra (como nos gráficos do painel); compras
+ * pessoais, parcela a parcela (como no painel pessoal).
+ * @param {{id:string, nome:string, db:object}[]} grupos db: membros, grupos, despesas, compras, pessoais, pessoaisCompras
+ * @returns {{grupoId, grupoNome, conjunto, tipo, data, descricao, categoria, meuValor, total, meses:{mes,valor}[]}[]} reais
  */
-export function meusSaldosNoGrupo(db, meUid) {
-  const mesAtual = mesAtualISO();
-  return db.grupos.map(g => {
-    const membrosG = membrosDoGrupo(g, db.membros);
-    if (!membrosG.has(meUid)) return null;
-    const d = montarDashboard(db, meUid, g.id);
-    // "vencido" = soma dos meses até o atual (o que já deveria ter sido acertado)
-    const vencido = Object.keys(d.meses).filter(m => m <= mesAtual)
-      .reduce((t, m) => t + Math.round(((d.meses[m].saldos.find(x => x._uid === meUid) || {}).saldo || 0) * 100), 0);
-    return { conjunto: g.nome, saldo: d.pessoal ? d.pessoal.saldoGeral : 0, vencido: reais(vencido) };
-  }).filter(Boolean);
+export function minhasDespesas(grupos, meUid) {
+  const out = [];
+  grupos.forEach(({ id, nome, db }) => {
+    const conjuntos = Object.fromEntries((db.grupos || []).map(g => [g.id, g]));
+    const membrosDe = g => membrosDoGrupo(g, db.membros || []);
+    const base = { grupoId: id, grupoNome: nome };
+    (db.despesas || []).forEach(d => {
+      if (d.acerto) return;
+      const g = conjuntos[d.grupoId];
+      const meu = devidoPorPessoa(d, membrosDe(g))[meUid] || 0;
+      if (meu <= 0) return;
+      out.push({ ...base, conjunto: g ? g.nome : '—', tipo: 'Despesa', data: d.data, descricao: d.descricao,
+        categoria: d.categoria, meuValor: reais(meu), total: reais(d.valor), meses: [{ mes: String(d.data).slice(0, 7), valor: reais(meu) }] });
+    });
+    (db.compras || []).forEach(c => {
+      const g = conjuntos[c.grupoId];
+      const meu = devidoPorPessoa(c, membrosDe(g))[meUid] || 0;
+      if (meu <= 0) return;
+      out.push({ ...base, conjunto: g ? g.nome : '—', tipo: 'Parcelada ' + c.nParcelas + 'x', data: c.data, descricao: c.descricao,
+        categoria: c.categoria, meuValor: reais(meu), total: reais(c.valor), meses: [{ mes: String(c.data).slice(0, 7), valor: reais(meu) }] });
+    });
+    (db.pessoais || []).forEach(d => {
+      out.push({ ...base, conjunto: 'Pessoal', tipo: 'Pessoal', data: d.data, descricao: d.descricao, categoria: d.categoria,
+        meuValor: reais(d.valor), total: reais(d.valor), meses: [{ mes: String(d.data).slice(0, 7), valor: reais(d.valor) }] });
+    });
+    (db.pessoaisCompras || []).forEach(c => {
+      const porMes = {};
+      parcelasDaCompra(c).forEach(p => { porMes[p.mes] = (porMes[p.mes] || 0) + p.valor; });
+      out.push({ ...base, conjunto: 'Pessoal', tipo: 'Pessoal · ' + c.nParcelas + 'x', data: c.data, descricao: c.descricao,
+        categoria: c.categoria, meuValor: reais(c.valor), total: reais(c.valor),
+        meses: Object.keys(porMes).sort().map(mes => ({ mes, valor: reais(porMes[mes]) })) });
+    });
+  });
+  return out.sort((a, b) => String(b.data).localeCompare(String(a.data)));
 }

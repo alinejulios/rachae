@@ -20,7 +20,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from '../firebase-config.js';
 import { normalizarChave } from './pix.js';
-import { montarDashboard, montarHistorico, membrosDoGrupo, montarDashboardPessoal, montarHistoricoPessoal, meusSaldosNoGrupo } from './calc.js';
+import { montarDashboard, montarHistorico, membrosDoGrupo, montarDashboardPessoal, montarHistoricoPessoal, minhasDespesas } from './calc.js';
 
 /** Valor especial do seletor de conjunto para o conjunto pessoal (privado). */
 export const PESSOAL = '__pessoal__';
@@ -110,6 +110,7 @@ export const esqueciSenha = email => tenta(async () => {
 export async function sair() {
   pararEscuta();
   CASA = null; DB = null;
+  TODOS_CACHE = { em: 0, grupos: null };
   if (auth) await signOut(auth);
 }
 
@@ -660,41 +661,43 @@ const ACOES = {
 };
 
 /**
- * Resumo do Perfil: meu saldo em todos os grupos e conjuntos. O grupo aberto usa os dados
- * em tempo real; os outros são lidos uma vez (e guardados por 1 minuto).
+ * "Meus gastos": lê todos os grupos da pessoa (inclusive as despesas pessoais dela em cada
+ * um). O grupo aberto usa os dados em tempo real; os outros são lidos uma vez e guardados
+ * por 1 minuto.
  */
-let RESUMO_CACHE = { em: 0, dados: null };
-export const resumoGeral = (forcar = false) => tenta(async () => {
+let TODOS_CACHE = { em: 0, grupos: null };
+export const meusGastos = (forcar = false) => tenta(async () => {
   const u = usuarioAtual();
-  if (!forcar && RESUMO_CACHE.dados && Date.now() - RESUMO_CACHE.em < 60000) return atualizarResumoAtual(RESUMO_CACHE.dados);
-  const { casas } = await lerPerfil(u.uid);
-  const out = [];
-  for (const hid of casas) {
-    if (CASA && hid === CASA.id) { out.push({ id: hid, nome: CASA.nome, atual: true, conjuntos: [] }); continue; }
-    try {
-      const casa = await getDoc(doc(fs, 'households', hid));
-      if (!casa.exists()) continue;
-      const ler = async col => (await getDocs(collection(fs, 'households', hid, col))).docs.map(d => {
-        const x = { id: d.id, ...d.data() };
-        if (col === 'membros') x.uid = d.id;
-        return x;
-      });
-      const [membros, grupos, despesas, compras, pagamentos] = await Promise.all(
-        ['membros', 'grupos', 'despesas', 'compras', 'pagamentos'].map(ler));
-      out.push({ id: hid, nome: casa.data().nome, conjuntos: meusSaldosNoGrupo({ membros, grupos, despesas, compras, pagamentos }, u.uid) });
-    } catch (e) { /* grupo inacessível */ }
+  if (forcar || !TODOS_CACHE.grupos || Date.now() - TODOS_CACHE.em > 60000) {
+    const { casas } = await lerPerfil(u.uid);
+    const grupos = [];
+    for (const hid of casas) {
+      if (CASA && hid === CASA.id) { grupos.push({ id: hid, nome: CASA.nome, db: null }); continue; }
+      try {
+        const casa = await getDoc(doc(fs, 'households', hid));
+        if (!casa.exists()) continue;
+        const ler = async (...caminho) => (await getDocs(collection(fs, 'households', hid, ...caminho))).docs.map(d => {
+          const x = { id: d.id, ...d.data() };
+          if (caminho[0] === 'membros') x.uid = d.id;
+          return x;
+        });
+        const [membros, conjuntos, despesas, compras, pessoais, pessoaisCompras] = await Promise.all([
+          ler('membros'), ler('grupos'), ler('despesas'), ler('compras'),
+          ler('pessoais', u.uid, 'despesas').catch(() => []), ler('pessoais', u.uid, 'compras').catch(() => [])
+        ]);
+        grupos.push({ id: hid, nome: casa.data().nome, db: { membros, grupos: conjuntos, despesas, compras, pessoais, pessoaisCompras } });
+      } catch (e) { /* grupo inacessível */ }
+    }
+    TODOS_CACHE = { em: Date.now(), grupos };
   }
-  RESUMO_CACHE = { em: Date.now(), dados: out };
-  return atualizarResumoAtual(out);
+  // O grupo aberto sempre com os dados ao vivo
+  const grupos = TODOS_CACHE.grupos.map(g => (CASA && g.id === CASA.id && DB) ? { id: g.id, nome: CASA.nome, db: DB } : g)
+    .filter(g => g.db);
+  return {
+    grupos: grupos.map(g => ({ id: g.id, nome: g.nome })),
+    itens: minhasDespesas(grupos, u.uid)
+  };
 });
-function atualizarResumoAtual(lista) {
-  return lista.map(g => (CASA && g.id === CASA.id && DB)
-    ? { ...g, nome: CASA.nome, atual: true, conjuntos: meusSaldosNoGrupo(DB, usuarioAtual().uid) }
-    : { ...g, atual: false })
-    .map(g => ({ ...g,
-      aPagar: Math.round(g.conjuntos.filter(c => c.saldo < 0).reduce((t, c) => t - c.saldo, 0) * 100) / 100,
-      aReceber: Math.round(g.conjuntos.filter(c => c.saldo > 0).reduce((t, c) => t + c.saldo, 0) * 100) / 100 }));
-}
 
 /** Anexa a chave Pix de quem recebe às sugestões de acerto e às compras em aberto. */
 function comPix(d) {
