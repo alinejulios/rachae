@@ -88,7 +88,7 @@ service cloud.firestore {
         // convite ativo desta casa — ou sendo o dono (no mesmo lote que cria a casa).
         allow create: if signedIn() && uid() == memberId
           && request.resource.data.keys().hasOnly(['nome', 'email', 'convite', 'entrouEm'])
-          && str(request.resource.data.nome, 1, 20)
+          && str(request.resource.data.nome, 1, 40)
           && str(request.resource.data.email, 3, 120)
           && (
             getAfter(casa(hid)).data.ownerUid == uid()
@@ -105,11 +105,11 @@ service cloud.firestore {
           return p == null || (p is map
             && p.keys().hasOnly(['tipo', 'chave', 'nome', 'cidade'])
             && p.tipo in ['cpf', 'cnpj', 'telefone', 'email', 'aleatoria']
-            && str(p.chave, 1, 77) && str(p.nome, 1, 25) && str(p.cidade, 1, 15));
+            && str(p.chave, 1, 77) && str(p.nome, 1, 60) && str(p.cidade, 1, 15));
         }
         allow update: if signedIn() && uid() == memberId
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nome', 'pix'])
-          && str(request.resource.data.nome, 1, 20)
+          && str(request.resource.data.nome, 1, 40)
           && pixOk(request.resource.data.get('pix', null));
         // Sair do grupo (a própria pessoa) ou ser removida pelo admin. O admin só
         // sai apagando o grupo inteiro (quando o grupo está marcado como "excluindo").

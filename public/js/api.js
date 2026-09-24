@@ -181,7 +181,7 @@ function gerarCodigo(n = 10) {
 }
 function validarNome(nome) {
   const n = String(nome || '').trim().replace(/\s+/g, ' ');
-  if (!/^[\p{L}][\p{L} .'-]{0,19}$/u.test(n)) throw new ApiError('Digite um nome de até 20 letras (sem números ou símbolos).');
+  if (!/^[\p{L}][\p{L} .'-]{0,39}$/u.test(n)) throw new ApiError('Digite um nome de até 40 letras (sem números ou símbolos).');
   return n;
 }
 
@@ -580,7 +580,7 @@ const ACOES = {
   async salvarPix({ tipo, chave, nome, cidade }) {
     const n = normalizarChave(tipo, chave);
     if (n.erro) throw new ApiError(n.erro);
-    const titular = String(nome || '').trim().slice(0, 25);
+    const titular = String(nome || '').trim().replace(/\s+/g, ' ').slice(0, 60);
     const cid = String(cidade || '').trim().slice(0, 15);
     if (!titular) throw new ApiError('Informe o nome do titular da conta (como aparece no banco).');
     if (!cid) throw new ApiError('Informe a cidade do titular.');

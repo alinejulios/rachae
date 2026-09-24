@@ -1,6 +1,6 @@
 import * as Firebase from './api.js';
 import { api, PESSOAL } from './api.js';
-import { payloadPix, chaveLegivel, TIPOS_CHAVE } from './pix.js';
+import { payloadPix, chaveLegivel, TIPOS_CHAVE, nomeParaQR } from './pix.js';
 import qrcode from '../vendor/qrcode.mjs';
 
 // =================================================================== Estado
@@ -234,7 +234,7 @@ ACTIONS.submit_form_conta = async form => {
   const email = $('conta-email').value.trim();
   const senha = $('conta-senha').value;
   const convite = $('conta-convite').value.trim().toUpperCase();
-  const erro = !/^[\p{L}][\p{L} .'-]{0,19}$/u.test(nome) ? 'Digite seu nome (até 20 letras, sem números).'
+  const erro = !/^[\p{L}][\p{L} .'-]{0,39}$/u.test(nome) ? 'Digite seu nome (até 40 letras, sem números).'
     : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? 'Digite um email válido.'
     : senha.length < 8 ? 'A senha precisa ter pelo menos 8 caracteres.' : null;
   if (erro) { hint('conta-hint', erro, 'error'); vibrate(60); return; }
@@ -1426,11 +1426,12 @@ function meuPixHtml(meuPix) {
       <label for="pix-chave">Chave</label>
       <input type="text" id="pix-chave" value="${h(p.chave || '')}" autocapitalize="off" autocorrect="off" spellcheck="false">
       <p class="hint" id="pix-chave-hint"></p>
-      <label for="pix-nome">Nome do titular (como está no banco)</label>
-      <input type="text" id="pix-nome" maxlength="25" value="${h(p.nome || (eu && eu.displayName) || '')}" autocapitalize="words">
+      <label for="pix-nome">Nome completo do titular (como está no banco)</label>
+      <input type="text" id="pix-nome" maxlength="60" data-input="previaNomeQR" value="${h(p.nome || (eu && eu.displayName) || '')}" autocapitalize="words">
       <label for="pix-cidade">Cidade do titular</label>
       <input type="text" id="pix-cidade" maxlength="15" value="${h(p.cidade || '')}" placeholder="Ex.: São Paulo" autocapitalize="words">
-      <p class="hint">Nome (até 25 letras) e cidade (até 15) entram no QR Code, como pede o padrão do Banco Central. A chave vale para todos os seus grupos.</p>
+      <p class="hint" id="pix-nome-qr"></p>
+      <p class="hint">A cidade vai até 15 letras, como pede o padrão do Banco Central. A chave vale para todos os seus grupos.</p>
       <div class="btn-row">
         <button class="secondary" type="button" data-action="cancelarPix">Cancelar</button>
         <button class="primary" type="submit">Salvar chave</button>
@@ -1452,6 +1453,14 @@ function ajustarCampoChave() {
   hintEl.className = 'hint' + (tipo === 'cpf' ? ' warn' : '');
 }
 ACTIONS.onPixTipo = () => ajustarCampoChave();
+// Mostra como o nome vai ficar dentro do QR (limite de 25 do padrão do BCB)
+ACTIONS.previaNomeQR = () => {
+  const nome = $('pix-nome').value.trim().replace(/\s+/g, ' ');
+  const qr = nomeParaQR(nome);
+  $('pix-nome-qr').textContent = !nome ? 'Pode usar o nome completo: até 60 letras.'
+    : qr === nome ? 'O nome cabe inteiro no QR Code.'
+    : 'No QR Code (limite de 25 do Banco Central) vai aparecer "' + qr + '". Quem paga vê o nome oficial da conta no banco.';
+};
 ACTIONS.editarPix = () => { EDITANDO_PIX = true; renderCasa(); };
 ACTIONS.cancelarPix = () => { EDITANDO_PIX = false; renderCasa(); };
 ACTIONS.salvarPix = async form => {
@@ -1629,7 +1638,7 @@ async function renderCasa() {
       ${EDITANDO_NOME === 'eu' ? `
         <form data-submit="salvarMeuNome" novalidate>
           <label for="meu-nome-input">Seu nome neste grupo</label>
-          <input type="text" id="meu-nome-input" maxlength="20" value="${h(STATE.pessoa || '')}" autocapitalize="words">
+          <input type="text" id="meu-nome-input" maxlength="40" value="${h(STATE.pessoa || '')}" autocapitalize="words">
           <div class="btn-row">
             <button class="secondary" type="button" data-action="editarNome" data-qual="">Cancelar</button>
             <button class="primary" type="submit">Salvar</button>
@@ -1694,7 +1703,7 @@ async function renderCasa() {
     </div>`}
   `;
   if (GRUPO_EDITANDO !== null) renderGrupoForm(grupos.find(g => g.id === GRUPO_EDITANDO) || null);
-  if (EDITANDO_PIX) ajustarCampoChave();
+  if (EDITANDO_PIX) { ajustarCampoChave(); ACTIONS.previaNomeQR(); }
 }
 
 // =================================================================== Meus grupos e conta (vale para tudo)

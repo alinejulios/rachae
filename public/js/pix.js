@@ -11,7 +11,8 @@
 //   53 Moeda = "986" (BRL)
 //   54 Valor (opcional, ex.: "123.45")
 //   58 País = "BR"
-//   59 Nome de quem recebe (até 25 caracteres)
+//   59 Nome de quem recebe (até 25 caracteres — limite do padrão; nomes maiores são
+//      abreviados por nomeParaQR, e o banco de quem paga mostra o nome oficial da conta)
 //   60 Cidade de quem recebe (até 15 caracteres)
 //   62 Dados adicionais → 05 txid (até 25; "***" quando não há identificador)
 //   63 CRC16-CCITT (polinômio 0x1021, valor inicial 0xFFFF), 4 dígitos hexadecimais
@@ -97,10 +98,28 @@ export function chaveLegivel(tipo, chave) {
 /** Remove acentos e caracteres fora do conjunto aceito pelos bancos; corta no tamanho máximo. */
 export function textoPix(s, max) {
   return String(s || '')
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^A-Za-z0-9 .\-]/g, ' ')
     .replace(/\s+/g, ' ').trim()
     .slice(0, max).trim();
+}
+
+const PARTICULAS = ['da', 'de', 'do', 'das', 'dos', 'e'];
+
+/**
+ * Encaixa um nome completo nos 25 caracteres do BR Code sem perder a identificação:
+ * 1) tira partículas (da, de, do, das, dos, e); 2) abrevia os nomes do meio, da direita
+ * para a esquerda (mantém sempre o primeiro e o último); 3) só então corta.
+ * Ex.: "Laysla Isabella Pereira de Oliveira" → "Laysla I P Oliveira".
+ */
+export function nomeParaQR(nome, max = 25) {
+  const limpo = textoPix(nome, 200);
+  if (limpo.length <= max) return limpo;
+  let partes = limpo.split(' ').filter(p => !PARTICULAS.includes(p.toLowerCase()));
+  if (partes.length < 2) return limpo.slice(0, max).trim();
+  const junta = () => partes.join(' ');
+  for (let i = partes.length - 2; i >= 1 && junta().length > max; i--) partes[i] = partes[i][0];
+  return junta().length <= max ? junta() : junta().slice(0, max).trim();
 }
 
 const campo = (id, valor) => id + String(valor.length).padStart(2, '0') + valor;
@@ -122,7 +141,7 @@ export function crc16(payload) {
  * @param {{chave:string, nome:string, cidade:string, valor?:number, txid?:string}} p
  */
 export function payloadPix({ chave, nome, cidade, valor, txid }) {
-  const nomeOk = textoPix(nome, 25);
+  const nomeOk = nomeParaQR(nome, 25);
   const cidadeOk = textoPix(cidade, 15);
   if (!chave) throw new Error('Chave Pix ausente.');
   if (!nomeOk) throw new Error('Nome de quem recebe ausente.');
