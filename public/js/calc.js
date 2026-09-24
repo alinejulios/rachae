@@ -92,7 +92,8 @@ export function montarDashboard(db, meUid, grupoId) {
   const reemb = {};
   membrosG.forEach(u => { reemb[u] = 0; });
   comprasGrupo.forEach(c => {
-    acumula(c.categoria, c.valor, c.data);
+    // Gráficos: cada parcela no mês em que vence (meses futuros aparecem como "a vencer")
+    parcelasDaCompra(c).forEach(p => acumula(c.categoria, p.valor, p.mes + '-01'));
     const s = situacaoCompra(c, membrosG, db.pagamentos);
     Object.keys(s.impacto).forEach(u => { if (u in parc) parc[u] += s.impacto[u]; });
     if ((s.deve[meUid] || 0) > 1) {
@@ -364,8 +365,7 @@ export function montarHistoricoPessoal(despesas, compras = []) {
  * "Meus gastos": tudo o que é da pessoa, em todos os grupos — a PARTE dela em cada despesa
  * e compra compartilhada (não o valor total) e as despesas pessoais inteiras. Acertos de
  * contas não são gasto e ficam de fora.
- * Compras compartilhadas contam no mês da compra (como nos gráficos do painel); compras
- * pessoais, parcela a parcela (como no painel pessoal).
+ * Compras parceladas (compartilhadas e pessoais) contam parcela a parcela, no mês em que vencem.
  * @param {{id:string, nome:string, db:object}[]} grupos db: membros, grupos, despesas, compras, pessoais, pessoaisCompras
  * @returns {{grupoId, grupoNome, conjunto, tipo, data, descricao, categoria, meuValor, total, meses:{mes,valor}[]}[]} reais
  */
@@ -387,8 +387,11 @@ export function minhasDespesas(grupos, meUid) {
       const g = conjuntos[c.grupoId];
       const meu = devidoPorPessoa(c, membrosDe(g))[meUid] || 0;
       if (meu <= 0) return;
+      const porMes = {};
+      parcelasDaCompra({ ...c, valor: meu }).forEach(p => { porMes[p.mes] = (porMes[p.mes] || 0) + p.valor; });
       out.push({ ...base, conjunto: g ? g.nome : '—', tipo: 'Parcelada ' + c.nParcelas + 'x', data: c.data, descricao: c.descricao,
-        categoria: c.categoria, meuValor: reais(meu), total: reais(c.valor), meses: [{ mes: String(c.data).slice(0, 7), valor: reais(meu) }] });
+        categoria: c.categoria, meuValor: reais(meu), total: reais(c.valor),
+        meses: Object.keys(porMes).sort().map(mes => ({ mes, valor: reais(porMes[mes]) })) });
     });
     (db.pessoais || []).forEach(d => {
       out.push({ ...base, conjunto: 'Pessoal', tipo: 'Pessoal', data: d.data, descricao: d.descricao, categoria: d.categoria,

@@ -668,6 +668,13 @@ function toggleChartEmpty(canvasId, emptyId, isEmpty) {
   emptyEl.classList.toggle('hidden', !isEmpty);
   return true;
 }
+/** Para cada mês do ano, se ele ainda não chegou (parcelas a vencer). */
+function mesesFuturos(ano) {
+  const atual = mesAtualKey();
+  return MESES_ABREV.map((_, i) => (ano + '-' + String(i + 1).padStart(2, '0')) > atual);
+}
+/** Mesma cor, transparente (35%) — usada nas barras de meses futuros. */
+function corClara(hex) { return /^#[0-9a-f]{6}$/i.test(hex) ? hex + '59' : hex; }
 function chartsReady() { return typeof window.Chart !== 'undefined'; }
 function fmtBRLCurto(v) {
   const n = Number(v) || 0;
@@ -708,7 +715,14 @@ function renderChartMensal() {
   if (!toggleChartEmpty('chart-mensal', 'chart-mensal-empty', semNada)) return;
   if (semNada) { hintEl.textContent = ''; return; }
 
-  const datasets = [{ label: String(ano), data: atual, backgroundColor: cssVar('--brand-blue'), borderRadius: 4, maxBarThickness: 18 }];
+  // Meses que ainda não chegaram (parcelas a vencer) ficam em tom mais claro
+  const futuro = mesesFuturos(ano);
+  const azul = cssVar('--brand-blue');
+  const datasets = [{
+    label: String(ano), data: atual, borderRadius: 4, maxBarThickness: 18,
+    backgroundColor: futuro.map(f => (f ? corClara(azul) : azul)),
+    borderColor: azul, borderWidth: futuro.map(f => (f ? 1.5 : 0))
+  }];
   if (temAnoAnterior) {
     datasets.push({ label: String(ano - 1), data: anterior, backgroundColor: cssVar('--brand-aqua'), borderRadius: 4, maxBarThickness: 18 });
   }
@@ -719,7 +733,7 @@ function renderChartMensal() {
       ...baseChartOptions(),
       plugins: {
         legend: { display: temAnoAnterior, position: 'top', align: 'end', labels: { boxWidth: 12, font: { size: 12 }, color: cssVar('--text-secondary') } },
-        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + fmtBRL(c.raw) } }
+        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + fmtBRL(c.raw) + (c.datasetIndex === 0 && futuro[c.dataIndex] ? ' (a vencer)' : '') } }
       },
       scales: {
         y: { grid: { color: cssVar('--gridline') }, border: { display: false }, ticks: { callback: fmtBRLCurto, color: cssVar('--text-muted'), maxTicksLimit: 5 } },
@@ -728,6 +742,7 @@ function renderChartMensal() {
     }
   });
 
+  const totalFuturo = atual.filter((_, i) => futuro[i]).reduce((t, v) => t + v, 0);
   const periodoLabel = mesesConsiderados < 12 ? ' (' + MESES_ABREV[0] + '–' + MESES_ABREV[mesesConsiderados - 1] + ')' : '';
   if (temAnoAnterior) {
     const diff = totalAtual - totalAnterior;
@@ -739,6 +754,7 @@ function renderChartMensal() {
     hintEl.className = 'hint';
     hintEl.textContent = 'Total ' + ano + periodoLabel + ': ' + fmtBRL(totalAtual);
   }
+  if (totalFuturo > 0) hintEl.textContent += ' · Barras claras: ' + fmtBRL(totalFuturo) + ' em parcelas a vencer.';
 }
 
 function renderChartCategoriaMes() {
@@ -2024,6 +2040,7 @@ function desenharMeusGastos() {
       <h3>Por mês em ${GASTOS.ano}</h3>
       <div class="chart-box" style="height:240px"><canvas id="chart-meus-gastos"></canvas></div>
       <p class="empty hidden" id="chart-meus-gastos-empty">Nenhum gasto seu em ${GASTOS.ano}.</p>
+      <p class="hint">Barras claras são parcelas que ainda vão vencer. Toque num mês para ver só ele.</p>
     </div>
 
     <div class="card">
@@ -2046,12 +2063,15 @@ function desenharGraficoMeusGastos(itens, grupos, corDe) {
   if (!chartsReady()) return;
   const ano = GASTOS.ano;
   const mostrar = GASTOS.grupo === 'todos' ? grupos : grupos.filter(g => g.id === GASTOS.grupo);
+  const futuro = mesesFuturos(ano);
   const datasets = mostrar.map(g => {
     const data = MESES_ABREV.map((_, i) => {
       const mes = ano + '-' + String(i + 1).padStart(2, '0');
       return itens.filter(x => x.grupoId === g.id).reduce((t, x) => t + x.meses.filter(m => m.mes === mes).reduce((s, m) => s + m.valor, 0), 0);
     });
-    return { label: g.nome, data, backgroundColor: corDe(g.id), borderRadius: 3, maxBarThickness: 22, stack: 'gastos' };
+    const cor = corDe(g.id);
+    return { label: g.nome, data, stack: 'gastos', borderRadius: 3, maxBarThickness: 22,
+      backgroundColor: futuro.map(f => (f ? corClara(cor) : cor)), borderColor: cor, borderWidth: futuro.map(f => (f ? 1.5 : 0)) };
   }).filter(ds => ds.data.some(v => v > 0));
   if (!toggleChartEmpty('chart-meus-gastos', 'chart-meus-gastos-empty', !datasets.length)) return;
   if (!datasets.length) return;
@@ -2064,7 +2084,7 @@ function desenharGraficoMeusGastos(itens, grupos, corDe) {
       plugins: {
         legend: { display: datasets.length > 1, position: 'top', align: 'start', labels: { boxWidth: 12, font: { size: 12 }, color: cssVar('--text-secondary') } },
         tooltip: { callbacks: {
-          label: c => c.dataset.label + ': ' + fmtBRL(c.raw),
+          label: c => c.dataset.label + ': ' + fmtBRL(c.raw) + (futuro[c.dataIndex] ? ' (a vencer)' : ''),
           footer: cs => cs.length > 1 ? 'Total: ' + fmtBRL(cs.reduce((t, c) => t + c.raw, 0)) : ''
         } }
       },

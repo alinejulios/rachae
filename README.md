@@ -123,6 +123,8 @@ ser conferidos sem Firebase, direto no Node, importando `public/js/calc.js`.
 - **Meus gastos** (menu de baixo): tudo o que é seu em todos os grupos — a sua parte em cada despesa
   e compra compartilhada e as despesas pessoais —, com total, quanto em cada grupo, gráfico por mês
   (barras empilhadas por grupo; toque num mês para ver só ele) e filtro por grupo, ano e mês.
+- **Parcelas a vencer nos gráficos:** compras parceladas entram parcela a parcela, no mês em que vencem;
+  os meses futuros aparecem em tom mais claro (painel, Pessoal e Meus gastos).
 - **Adiantar parcelas e pagar atrasados:** na aba Pagar, cada parcela mostra se está paga, atrasada,
   vence este mês ou a vencer; o pagamento abate da mais antiga para a mais nova (pagar a mais adianta).
   No Pessoal, "Adiantar parcelas" traz as últimas parcelas para o mês atual. Em "Acertar as contas",
