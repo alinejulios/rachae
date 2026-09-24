@@ -256,7 +256,9 @@ ACTIONS.submit_form_senha = async form => {
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
       await Firebase.esqueciSenha(email);
-      hint('senha-hint', 'Pronto! Se esse email tiver conta, o link chega em instantes (confira o spam).', 'ok');
+      hint('senha-hint', 'Pedido enviado! Se ' + email + ' tiver conta no Rachaê, o link chega em alguns minutos, ' +
+        'de noreply@' + (Firebase.dominioAuth() || 'firebaseapp.com') + '. Confira o spam e a aba Promoções. ' +
+        'Não chegou? Confira se é o mesmo email usado para criar a conta.', 'ok');
     } catch (err) { hint('senha-hint', err.message, 'error'); }
   });
 };

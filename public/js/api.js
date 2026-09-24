@@ -61,6 +61,8 @@ const ERROS = {
   'auth/network-request-failed': 'Sem conexão com a internet.',
   'auth/configuration-not-found': 'O login ainda não foi ativado no Firebase (Authentication > Método de login > E-mail/senha).',
   'auth/operation-not-allowed': 'O login por email e senha está desativado no Firebase (Authentication > Método de login).',
+  'auth/missing-email': 'Digite seu email.',
+  'auth/unauthorized-continue-uri': 'Este endereço não está autorizado no Firebase (Authentication > Configurações > Domínios autorizados).',
   'auth/unauthorized-domain': 'Este endereço não está autorizado no Firebase (Authentication > Configurações > Domínios autorizados).',
   'permission-denied': 'Sem permissão para isso.',
   'unavailable': 'Sem conexão com o servidor. Tente de novo.'
@@ -79,6 +81,7 @@ let CASA = null;   // { id, nome, ownerUid, categorias, segmentos, conviteAtual 
 let DB = null;     // { membros, grupos, despesas, compras, pagamentos }
 let unsubs = [];
 
+export function dominioAuth() { return configurado ? firebaseConfig.authDomain : ''; }
 export function usuarioAtual() { return auth ? auth.currentUser : null; }
 export function souDono() { return !!(CASA && usuarioAtual() && CASA.ownerUid === usuarioAtual().uid); }
 export function casaAtual() { return CASA; }
@@ -101,7 +104,8 @@ export const criarConta = (nome, email, senha) => tenta(async () => {
 });
 export const esqueciSenha = email => tenta(async () => {
   exigirConfig();
-  await sendPasswordResetEmail(auth, email.trim());
+  // Depois de criar a senha nova, o Firebase mostra o botão "Continuar", que volta para o app
+  await sendPasswordResetEmail(auth, email.trim().toLowerCase(), { url: location.origin + '/' });
 });
 export async function sair() {
   pararEscuta();
