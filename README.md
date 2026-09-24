@@ -129,4 +129,6 @@ ser conferidos sem Firebase, direto no Node, importando `public/js/calc.js`.
   vence este mês ou a vencer; o pagamento abate da mais antiga para a mais nova (pagar a mais adianta).
   No Pessoal, "Adiantar parcelas" traz as últimas parcelas para o mês atual. Em "Acertar as contas",
   a lista de meses em aberto leva direto ao Pix de cada mês.
+- **Uma tela só para lançar:** "Nova" despesa com a opção **À vista | Parcelado**; no parcelado entram nº de
+  parcelas, 1ª parcela no mês seguinte e a prévia dos meses (a antiga aba Parcelada saiu do menu).
 - Sem limite de 5 pessoas.

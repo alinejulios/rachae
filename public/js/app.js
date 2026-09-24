@@ -445,7 +445,7 @@ ACTIONS.removeDraftTag = el => {
 // =================================================================== Navegação
 function switchTab(tab, opts = {}) {
   STATE.currentTab = tab;
-  ['dashboard', 'despesa', 'compra', 'pagamento', 'historico', 'casa', 'grupos', 'gastos'].forEach(t => {
+  ['dashboard', 'despesa', 'pagamento', 'historico', 'casa', 'grupos', 'gastos'].forEach(t => {
     $('tab-' + t).classList.toggle('hidden', t !== tab);
   });
   document.querySelectorAll('nav.tabbar button').forEach(b => {
@@ -457,7 +457,6 @@ function switchTab(tab, opts = {}) {
 
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'despesa') renderDespesaForm();
-  if (tab === 'compra') renderCompraForm();
   if (tab === 'pagamento') renderPagamentoForm();
   if (tab === 'historico') loadHistorico();
   if (tab === 'casa') renderCasa();
@@ -824,6 +823,9 @@ function moneyInput(id, extraAttrs = '') {
   return `<div class="money"><input type="text" id="${id}" inputmode="decimal" autocomplete="off" placeholder="0,00" enterkeyhint="next" ${extraAttrs}></div>`;
 }
 
+// Nova despesa: um só formulário. "Parcelado" acrescenta nº de parcelas, 1ª parcela no mês
+// seguinte e a prévia dos meses; por baixo, vira uma compra parcelada.
+let DESP_PARCELADO = false;
 function renderDespesaForm() {
   const el = $('tab-despesa');
   const cfg = STATE.config;
@@ -835,12 +837,25 @@ function renderDespesaForm() {
   el.innerHTML = `
     <form class="card" data-submit="submitDespesa" novalidate autocomplete="off">
       <h3>Nova despesa</h3>
+      <div class="segmented" role="radiogroup" aria-label="Forma de pagamento" style="position:static;margin-bottom:6px">
+        <button type="button" role="radio" aria-checked="${!DESP_PARCELADO}" class="${DESP_PARCELADO ? '' : 'active'}" data-action="modoPagamento" data-parcelado="0">À vista</button>
+        <button type="button" role="radio" aria-checked="${DESP_PARCELADO}" class="${DESP_PARCELADO ? 'active' : ''}" data-action="modoPagamento" data-parcelado="1">Parcelado</button>
+      </div>
       <label for="desp-descricao">Descrição</label>
-      <input type="text" id="desp-descricao" placeholder="Ex.: Conta de luz" autocapitalize="sentences" enterkeyhint="next">
+      <input type="text" id="desp-descricao" placeholder="${DESP_PARCELADO ? 'Ex.: Sofá novo' : 'Ex.: Conta de luz'}" autocapitalize="sentences" enterkeyhint="next">
       <label for="desp-valor">Valor total</label>
-      ${moneyInput('desp-valor', 'data-input="updateDivisaoHintFromValor" data-prefix="desp"')}
-      <label for="desp-data">Data</label>
-      <input type="date" id="desp-data" value="${todayStr()}">
+      ${moneyInput('desp-valor', 'data-input="aoMudarValor" data-prefix="desp"')}
+      <div id="desp-parcelas" class="${DESP_PARCELADO ? '' : 'hidden'}">
+        <label for="desp-nparc">Nº de parcelas</label>
+        <input type="text" id="desp-nparc" value="2" inputmode="numeric" pattern="[0-9]*" data-input="updateParcelaPreview">
+        <label class="participa-item" style="margin-top:10px">
+          <input type="checkbox" id="desp-seguinte" data-change="updateParcelaPreview" ${store.get(K.parcelaSeguinte, false) ? 'checked' : ''}>
+          1ª parcela só no mês seguinte (fatura seguinte)
+        </label>
+        <p class="hint" id="desp-parcela-hint"></p>
+      </div>
+      <label for="desp-data">${DESP_PARCELADO ? 'Data da compra' : 'Data'}</label>
+      <input type="date" id="desp-data" value="${todayStr()}" data-change="updateParcelaPreview">
       <label for="desp-categoria">Categoria</label>
       <select id="desp-categoria">${optionsHtml(cfg.categorias)}</select>
       <label for="desp-segmento">Segmento</label>
@@ -851,52 +866,37 @@ function renderDespesaForm() {
       <div id="desp-pessoas-fields"></div>
       <span class="field-label">Tags</span>
       <div id="desp-tags-editor"></div>
-      <button class="primary" type="submit">Adicionar despesa</button>
+      <button class="primary" type="submit">${DESP_PARCELADO ? 'Adicionar despesa parcelada' : 'Adicionar despesa'}</button>
     </form>
   `;
   renderPessoasFields('desp');
   renderTagEditor('desp-tags-editor');
+  if (DESP_PARCELADO) ACTIONS.updateParcelaPreview();
 }
-
-function renderCompraForm() {
-  const el = $('tab-compra');
-  const cfg = STATE.config;
-  if (!STATE.grupos.length && !pessoaisLigadas()) {
-    el.innerHTML = '<div class="card"><h3>Nova compra parcelada</h3><p class="empty">Nenhum conjunto de despesas ainda. Crie um na tela do grupo (ícone de pessoa, no topo).</p></div>';
-    return;
-  }
-  TAG_DRAFTS['compra-tags-editor'] = [];
-  el.innerHTML = `
-    <form class="card" data-submit="submitCompra" novalidate autocomplete="off">
-      <h3>Nova compra parcelada no cartão</h3>
-      <label for="compra-descricao">Descrição</label>
-      <input type="text" id="compra-descricao" placeholder="Ex.: Sofá novo" autocapitalize="sentences" enterkeyhint="next">
-      <label for="compra-valor">Valor total</label>
-      ${moneyInput('compra-valor', 'data-input="updateParcelaPreview"')}
-      <label for="compra-nparc">Nº de parcelas</label>
-      <input type="text" id="compra-nparc" value="1" inputmode="numeric" pattern="[0-9]*" data-input="updateParcelaPreview">
-      <p class="hint" id="compra-parcela-hint"></p>
-      <label for="compra-data">Data da compra</label>
-      <input type="date" id="compra-data" value="${todayStr()}" data-change="updateParcelaPreview">
-      <label class="participa-item" style="margin-top:10px">
-        <input type="checkbox" id="compra-seguinte" data-change="updateParcelaPreview" ${store.get(K.parcelaSeguinte, false) ? 'checked' : ''}>
-        1ª parcela só no mês seguinte (fatura seguinte)
-      </label>
-      <label for="compra-categoria">Categoria</label>
-      <select id="compra-categoria">${optionsHtml(cfg.categorias)}</select>
-      <label for="compra-grupo">Conjunto de despesas</label>
-      <select id="compra-grupo" data-change="renderPessoasFields" data-prefix="compra">${optionsHtml(STATE.grupos.map(g => g.nome), noPessoal() ? null : grupoInicial())}${
-        pessoaisLigadas() ? `<option value="${PESSOAL}" ${noPessoal() ? 'selected' : ''}>Pessoal (só você)</option>` : ''}</select>
-      <div id="compra-pessoas-fields"></div>
-      <span class="field-label">Tags</span>
-      <div id="compra-tags-editor"></div>
-      <button class="primary" type="submit">Adicionar compra parcelada</button>
-    </form>
-  `;
-  renderPessoasFields('compra');
-  renderTagEditor('compra-tags-editor');
-}
-
+// Troca À vista ⇄ Parcelado sem perder o que já foi digitado
+ACTIONS.modoPagamento = el => {
+  const novo = el.dataset.parcelado === '1';
+  if (novo === DESP_PARCELADO) return;
+  const campos = ['desp-descricao', 'desp-valor', 'desp-data', 'desp-categoria', 'desp-grupo'];
+  const guardado = Object.fromEntries(campos.map(id => [id, $(id) ? $(id).value : '']));
+  const participantes = getParticipantesSelecionados('desp');
+  const pagador = $('desp-pagopor') ? $('desp-pagopor').value : null;
+  const tags = (TAG_DRAFTS['desp-tags-editor'] || []).slice();
+  DESP_PARCELADO = novo;
+  renderDespesaForm();
+  campos.forEach(id => { if ($(id) && guardado[id]) $(id).value = guardado[id]; });
+  renderPessoasFields('desp');
+  if (pagador && $('desp-pagopor')) $('desp-pagopor').value = pagador;
+  document.querySelectorAll('.desp-participa-input').forEach(i => { i.checked = participantes.includes(i.dataset.nome); });
+  if (participantes.length) { updateParticipaHint('desp'); renderDivisaoFields('desp'); }
+  TAG_DRAFTS['desp-tags-editor'] = tags;
+  renderTagEditor('desp-tags-editor');
+  if (DESP_PARCELADO) ACTIONS.updateParcelaPreview();
+};
+ACTIONS.aoMudarValor = el => {
+  ACTIONS.updateDivisaoHintFromValor(el);
+  if (DESP_PARCELADO) ACTIONS.updateParcelaPreview();
+};
 // Campos que dependem do grupo: quem pagou, quem participa, método de divisão
 function renderPessoasFields(prefixOrEl) {
   const prefix = typeof prefixOrEl === 'string' ? prefixOrEl : prefixOrEl.dataset.prefix;
@@ -904,16 +904,22 @@ function renderPessoasFields(prefixOrEl) {
   const seg = $(prefix + '-segmento');
   if (seg) seg.closest('form').querySelector('label[for="' + prefix + '-segmento"]').classList.toggle('hidden', pessoal);
   if (seg) seg.classList.toggle('hidden', pessoal);
+  const parcelado = prefix === 'compra' || (prefix === 'desp' && DESP_PARCELADO);
+  if (seg) {
+    const esconder = pessoal || parcelado; // compra parcelada não tem segmento
+    seg.classList.toggle('hidden', esconder);
+    seg.closest('form').querySelector('label[for="' + prefix + '-segmento"]').classList.toggle('hidden', esconder);
+  }
   if (pessoal) {
-    $(prefix + '-pessoas-fields').innerHTML = (prefix === 'compra'
+    $(prefix + '-pessoas-fields').innerHTML = (parcelado
       ? '<p class="hint">🔒 Compra pessoal: só você vê. Cada parcela entra no painel no mês em que vence, a partir do mês da compra.</p>'
       : '<p class="hint">🔒 Despesa pessoal: só você vê e ela não entra na divisão do grupo.</p>');
     return;
   }
   const membros = grupoMembros($(prefix + '-grupo').value);
-  const pagadorLabel = prefix === 'desp' ? 'Pago por' : 'Comprador (quem colocou no cartão)';
+  const pagadorLabel = parcelado ? 'Quem pagou (no cartão de quem)' : 'Pago por';
   const pagadorId = prefix === 'desp' ? 'desp-pagopor' : 'compra-comprador';
-  const oque = prefix === 'desp' ? 'desta despesa' : 'desta compra';
+  const oque = parcelado ? 'desta compra' : 'desta despesa';
   $(prefix + '-pessoas-fields').innerHTML = `
     <label for="${pagadorId}">${pagadorLabel}</label>
     <select id="${pagadorId}">${optionsHtml(membros, STATE.pessoa)}</select>
@@ -1039,126 +1045,69 @@ function validarLancamento(prefix, valorTotal, participantes) {
   return null;
 }
 
-ACTIONS.submitDespesa = async form => {
-  if ($('desp-grupo').value === PESSOAL) { await submitDespesaPessoal(form); return; }
-  const metodo = $('desp-metodo').value;
-  const participantes = getParticipantesSelecionados('desp');
+/** Lê e valida o formulário; devolve {payload} ou {erro}. */
+function lerFormularioDespesa() {
+  const pessoal = $('desp-grupo').value === PESSOAL;
   const valorTotal = parseMoney($('desp-valor').value);
-  const erro = validarLancamento('desp', valorTotal, participantes);
-  if (erro) { showToast(erro, true); vibrate(60); return; }
-  const payload = {
+  const nParcelas = DESP_PARCELADO ? parseInt($('desp-nparc').value, 10) : 1;
+  if (DESP_PARCELADO && !(nParcelas >= 2 && nParcelas <= 60)) return { erro: 'Informe de 2 a 60 parcelas (para 1x, use À vista).' };
+  const base = {
     data: $('desp-data').value || todayStr(),
     descricao: $('desp-descricao').value.trim(),
     categoria: $('desp-categoria').value,
-    segmento: $('desp-segmento').value,
     grupo: $('desp-grupo').value,
-    valorTotal,
-    pagoPor: $('desp-pagopor').value,
-    metodo,
-    participantes,
-    divisao: metodo === 'Igual' ? null : collectDivisao('desp', metodo === 'Porcentagem')
+    valorTotal
   };
+  const parcelas = DESP_PARCELADO ? { nParcelas, parcelaSeguinte: $('desp-seguinte').checked } : {};
+  if (pessoal) {
+    if (!base.descricao) return { erro: 'Preencha a descrição.' };
+    if (!(valorTotal > 0)) return { erro: 'Informe um valor maior que zero.' };
+    return { payload: { ...base, ...parcelas } };
+  }
+  const metodo = $('desp-metodo').value;
+  const participantes = getParticipantesSelecionados('desp');
+  const erro = validarLancamento('desp', valorTotal, participantes);
+  if (erro) return { erro };
+  const comum = { ...base, metodo, participantes, divisao: metodo === 'Igual' ? null : collectDivisao('desp', metodo === 'Porcentagem') };
+  return { payload: DESP_PARCELADO
+    ? { ...comum, ...parcelas, comprador: $('desp-pagopor').value }
+    : { ...comum, segmento: $('desp-segmento').value, pagoPor: $('desp-pagopor').value } };
+}
+ACTIONS.submitDespesa = async form => {
+  const { payload, erro } = lerFormularioDespesa();
+  if (erro) { showToast(erro, true); vibrate(60); return; }
+  const pessoal = payload.grupo === PESSOAL;
   const tags = (TAG_DRAFTS['desp-tags-editor'] || []).slice();
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      const res = await api('addDespesa', { payload });
-      if (tags.length && res && res.row) saveTags('desp:' + res.row, tags);
+      if (DESP_PARCELADO) {
+        const res = await api('addCompraParcelada', { payload });
+        if (tags.length && res && res.id) saveTags('compra:' + res.id, tags);
+        showToast((pessoal ? 'Despesa pessoal parcelada adicionada: ' : 'Despesa parcelada adicionada: ') +
+          payload.nParcelas + 'x de ' + fmtBRL(payload.valorTotal / payload.nParcelas) + '.');
+      } else {
+        const res = await api('addDespesa', { payload });
+        if (tags.length && res && res.row) saveTags('desp:' + res.row, tags);
+        showToast(pessoal ? 'Despesa pessoal adicionada!' : 'Despesa adicionada!');
+      }
       vibrate(20);
-      showToast('Despesa adicionada!');
       renderDespesaForm();
     } catch (err) { onApiError(err); }
   });
 };
-
-async function submitCompraPessoal(form) {
-  const valorTotal = parseMoney($('compra-valor').value);
-  const nParcelas = parseInt($('compra-nparc').value, 10);
-  const erro = !$('compra-descricao').value.trim() ? 'Preencha a descrição.'
-    : !(valorTotal > 0) ? 'Informe um valor maior que zero.'
-    : !(nParcelas >= 1 && nParcelas <= 60) ? 'Informe de 1 a 60 parcelas.' : null;
-  if (erro) { showToast(erro, true); vibrate(60); return; }
-  const payload = {
-    grupo: PESSOAL, data: $('compra-data').value || todayStr(), descricao: $('compra-descricao').value.trim(),
-    categoria: $('compra-categoria').value, valorTotal, nParcelas, parcelaSeguinte: $('compra-seguinte').checked
-  };
-  const tags = (TAG_DRAFTS['compra-tags-editor'] || []).slice();
-  await withBusy(form.querySelector('button[type=submit]'), async () => {
-    try {
-      const res = await api('addCompraParcelada', { payload });
-      if (tags.length && res && res.id) saveTags('compra:' + res.id, tags);
-      vibrate(20);
-      showToast('Compra parcelada pessoal adicionada!');
-      renderCompraForm();
-    } catch (err) { onApiError(err); }
-  });
-}
-async function submitDespesaPessoal(form) {
-  const valorTotal = parseMoney($('desp-valor').value);
-  if (!$('desp-descricao').value.trim()) { showToast('Preencha a descrição.', true); vibrate(60); return; }
-  if (!(valorTotal > 0)) { showToast('Informe um valor maior que zero.', true); vibrate(60); return; }
-  const payload = {
-    grupo: PESSOAL, data: $('desp-data').value || todayStr(), descricao: $('desp-descricao').value.trim(),
-    categoria: $('desp-categoria').value, valorTotal
-  };
-  const tags = (TAG_DRAFTS['desp-tags-editor'] || []).slice();
-  await withBusy(form.querySelector('button[type=submit]'), async () => {
-    try {
-      const res = await api('addDespesa', { payload });
-      if (tags.length && res && res.row) saveTags('desp:' + res.row, tags);
-      vibrate(20);
-      showToast('Despesa pessoal adicionada!');
-      renderDespesaForm();
-    } catch (err) { onApiError(err); }
-  });
-}
 ACTIONS.updateParcelaPreview = () => {
-  const valor = parseMoney($('compra-valor').value) || 0;
-  const n = parseInt($('compra-nparc').value, 10) || 0;
-  const seguinte = $('compra-seguinte') && $('compra-seguinte').checked;
+  if (!DESP_PARCELADO || !$('desp-parcela-hint')) return;
+  const valor = parseMoney($('desp-valor').value) || 0;
+  const n = parseInt($('desp-nparc').value, 10) || 0;
+  const seguinte = $('desp-seguinte').checked;
   store.set(K.parcelaSeguinte, !!seguinte); // lembra a preferência neste aparelho
-  const dataCompra = $('compra-data').value || todayStr();
-  const [a, m] = dataCompra.split('-').map(Number);
+  const [a, m] = ($('desp-data').value || todayStr()).split('-').map(Number);
   const primeira = new Date(a, m - 1 + (seguinte ? 1 : 0), 1);
   const ultima = new Date(a, m - 1 + (seguinte ? 1 : 0) + Math.max(n, 1) - 1, 1);
   const mesAno = d => MESES_ABREV[d.getMonth()].toLowerCase() + '/' + d.getFullYear();
-  $('compra-parcela-hint').textContent = (valor > 0 && n > 0)
+  $('desp-parcela-hint').textContent = (valor > 0 && n > 0)
     ? n + 'x de ' + fmtBRL(valor / n) + ' · de ' + mesAno(primeira) + (n > 1 ? ' a ' + mesAno(ultima) : '')
-    : '';
-  if ($('compra-metodo') && $('compra-metodo').value === 'Igual') renderDivisaoFields('compra');
-  else updateDivisaoHint('compra');
-};
-ACTIONS.submitCompra = async form => {
-  if ($('compra-grupo').value === PESSOAL) { await submitCompraPessoal(form); return; }
-  const metodo = $('compra-metodo').value;
-  const participantes = getParticipantesSelecionados('compra');
-  const valorTotal = parseMoney($('compra-valor').value);
-  const nParcelas = parseInt($('compra-nparc').value, 10);
-  const erro = validarLancamento('compra', valorTotal, participantes) ||
-    (!(nParcelas >= 1) ? 'Informe o número de parcelas.' : null);
-  if (erro) { showToast(erro, true); vibrate(60); return; }
-  const payload = {
-    data: $('compra-data').value || todayStr(),
-    descricao: $('compra-descricao').value.trim(),
-    categoria: $('compra-categoria').value,
-    grupo: $('compra-grupo').value,
-    valorTotal,
-    comprador: $('compra-comprador').value,
-    nParcelas,
-    parcelaSeguinte: $('compra-seguinte').checked,
-    metodo,
-    participantes,
-    divisao: metodo === 'Igual' ? null : collectDivisao('compra', metodo === 'Porcentagem')
-  };
-  const tags = (TAG_DRAFTS['compra-tags-editor'] || []).slice();
-  await withBusy(form.querySelector('button[type=submit]'), async () => {
-    try {
-      const res = await api('addCompraParcelada', { payload });
-      if (tags.length && res && res.id) saveTags('compra:' + res.id, tags);
-      vibrate(20);
-      showToast('Compra adicionada!' + (res && res.id ? ' ID: ' + res.id : ''));
-      renderCompraForm();
-    } catch (err) { onApiError(err); }
-  });
+    : 'Informe o valor total para ver as parcelas.';
 };
 
 // =================================================================== Pagamento de parcela
@@ -2182,6 +2131,12 @@ document.addEventListener('visibilitychange', () => {
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+
+// Só no computador de desenvolvimento: permite testar telas com dados de exemplo pelo console
+if (location.hostname === 'localhost') {
+  window.__rachaeDev = { STATE, switchTab, enterApp: nome => { document.body.classList.remove('on-login');
+    $('screen-login').classList.add('hidden'); $('screen-app').classList.remove('hidden'); $('who-name').textContent = nome; } };
 }
 
 init();
