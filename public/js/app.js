@@ -294,7 +294,7 @@ function enterApp(nome) {
   $('screen-login').classList.add('hidden');
   $('screen-app').classList.remove('hidden');
   $('who-name').textContent = nome;
-  $('who-casa').textContent = (STATE.casa && STATE.casa.nome) || 'Divisão de contas';
+  $('who-casa').textContent = (STATE.casa && STATE.casa.nome) || 'Rachaê';
   loadGrupos();
 }
 ACTIONS.logout = async () => {
@@ -315,7 +315,7 @@ async function atualizarAoVivo() {
     if (STATE.casa) $('who-casa').textContent = Firebase.casaAtual().nome;
     const saiuDaCasa = !meuNome;
     if (saiuDaCasa) { showToast('Você não faz mais parte deste grupo.', true); goToLogin(); return; }
-    if (['dashboard', 'historico', 'casa'].includes(STATE.currentTab)) refreshCurrentTabData();
+    if (['dashboard', 'historico', 'casa', 'grupos'].includes(STATE.currentTab)) refreshCurrentTabData();
   } catch (err) { /* sem conexão: tenta na próxima mudança */ }
 }
 
@@ -327,6 +327,7 @@ async function loadGrupos() {
     showToast('Erro ao carregar conjuntos: ' + err.message, true);
     STATE.grupos = [];
   }
+  // Ao abrir outro grupo, vai para o painel dele (exceto logo após criar, que abre os ajustes)
   switchTab(STATE.currentTab === 'casa' ? 'casa' : 'dashboard');
 }
 function pessoaisLigadas() { return !!(STATE.config && STATE.config.despesasPessoais); }
@@ -438,7 +439,7 @@ ACTIONS.removeDraftTag = el => {
 // =================================================================== Navegação
 function switchTab(tab, opts = {}) {
   STATE.currentTab = tab;
-  ['dashboard', 'despesa', 'compra', 'pagamento', 'historico', 'casa'].forEach(t => {
+  ['dashboard', 'despesa', 'compra', 'pagamento', 'historico', 'casa', 'grupos'].forEach(t => {
     $('tab-' + t).classList.toggle('hidden', t !== tab);
   });
   document.querySelectorAll('nav.tabbar button').forEach(b => {
@@ -454,6 +455,7 @@ function switchTab(tab, opts = {}) {
   if (tab === 'pagamento') renderPagamentoForm();
   if (tab === 'historico') loadHistorico();
   if (tab === 'casa') renderCasa();
+  if (tab === 'grupos') renderMeusGrupos();
 }
 
 // =================================================================== Dashboard
@@ -1267,13 +1269,10 @@ async function renderCasa() {
   const convite = dono ? Firebase.conviteAtual() : null;
   const link = convite ? location.origin + location.pathname + '?convite=' + convite : '';
   const eu = Firebase.usuarioAtual();
-  const casas = await Firebase.minhasCasas().catch(() => []);
-
   el.innerHTML = `
+    <h2 class="page-title">Ajustes de ${h(casa.nome)}</h2>
+    <p class="escopo">⚙️ Tudo aqui vale só para este grupo. Para trocar de grupo ou sair da conta, toque no nome do grupo no topo.</p>
     <div class="card">
-      <div class="chart-head">
-        <h3>Grupo aberto</h3>
-      </div>
       ${EDITANDO_NOME === 'grupo' ? `
         <form data-submit="salvarNomeGrupo" novalidate>
           <label for="nome-grupo-input">Nome do grupo</label>
@@ -1284,7 +1283,7 @@ async function renderCasa() {
           </div>
         </form>` : `
         <div class="list-row">
-          <div style="font-family:var(--font-display);font-size:20px;font-weight:700">${h(casa.nome)}</div>
+          <div><span class="field-label" style="margin:0">Nome do grupo</span>${h(casa.nome)}</div>
           ${dono ? '<button type="button" class="del-btn" data-action="editarNome" data-qual="grupo">Editar nome</button>' : ''}
         </div>`}
       <span class="field-label">Pessoas</span>
@@ -1304,21 +1303,6 @@ async function renderCasa() {
             <button class="primary" type="submit">Salvar</button>
           </div>
         </form>` : ''}
-    </div>
-
-    <div class="card">
-      <h3>Trocar de grupo</h3>
-      ${casas.map(c => `
-        <div class="list-row">
-          <div>${h(c.nome)}${c.souDono ? '<span class="badge">admin</span>' : ''}${c.id === casa.id ? '<span class="badge">aberto</span>' : ''}</div>
-          ${c.id !== casa.id ? `<button type="button" class="del-btn" data-action="trocarCasa" data-id="${h(c.id)}">Abrir</button>` : ''}
-        </div>`).join('')}
-      <div id="outra-casa-form"></div>
-      ${OUTRA_CASA === null ? `
-        <div class="btn-row">
-          <button class="secondary" type="button" data-action="outraCasa" data-modo="criar">+ Criar grupo</button>
-          <button class="secondary" type="button" data-action="outraCasa" data-modo="convite">Entrar com convite</button>
-        </div>` : ''}
     </div>
 
     ${dono ? `
@@ -1358,14 +1342,49 @@ async function renderCasa() {
       <p class="hint">Cada pessoa ganha um conjunto "Pessoal (só você)": ninguém mais vê, nem quem administra, e não entra na divisão.</p>
     </div>` : ''}
 
+    ${!dono ? `
     <div class="card">
-      <h3>Conta</h3>
-      <p class="hint" style="margin-top:0">Entrou como ${h(eu.email)}</p>
-      ${!dono ? `<button class="secondary danger" type="button" data-action="sairDaCasa">Sair do grupo ${h(casa.nome)}</button>` : ''}
-      <button class="secondary danger" type="button" data-action="logout">Sair deste aparelho</button>
-    </div>
+      <h3>Sair do grupo</h3>
+      <p class="hint" style="margin-top:0">Você deixa de ver ${h(casa.nome)}. Seus lançamentos continuam no histórico dele.</p>
+      <button class="secondary danger" type="button" data-action="sairDaCasa">Sair de ${h(casa.nome)}</button>
+    </div>` : ''}
   `;
   if (GRUPO_EDITANDO !== null) renderGrupoForm(grupos.find(g => g.id === GRUPO_EDITANDO) || null);
+}
+
+// =================================================================== Meus grupos e conta (vale para tudo)
+async function renderMeusGrupos() {
+  const el = $('tab-grupos');
+  const casa = Firebase.casaAtual();
+  const eu = Firebase.usuarioAtual();
+  const casas = await Firebase.minhasCasas().catch(() => []);
+  el.innerHTML = `
+    <h2 class="page-title">Meus grupos</h2>
+    <p class="page-sub">Toque num grupo para abrir. Os ajustes de cada grupo ficam na engrenagem ⚙️, dentro dele.</p>
+    <div class="card">
+      ${casas.map(c => `
+        <div class="list-row">
+          <div>${h(c.nome)}${c.souDono ? '<span class="badge">admin</span>' : ''}
+            <div class="sub">${c.id === (casa && casa.id) ? 'Aberto agora' : ''}</div></div>
+          ${c.id !== (casa && casa.id)
+            ? `<button type="button" class="del-btn" data-action="trocarCasa" data-id="${h(c.id)}">Abrir</button>`
+            : '<button type="button" class="del-btn" data-tab="dashboard">Voltar a ele</button>'}
+        </div>`).join('')}
+      <div id="outra-casa-form"></div>
+      ${OUTRA_CASA === null ? `
+        <div class="btn-row">
+          <button class="secondary" type="button" data-action="outraCasa" data-modo="criar">+ Criar grupo</button>
+          <button class="secondary" type="button" data-action="outraCasa" data-modo="convite">Entrar com convite</button>
+        </div>` : ''}
+    </div>
+
+    <h2 class="page-title" style="margin-top:22px">Minha conta</h2>
+    <div class="card">
+      <div class="list-row"><div>Email<div class="sub">${h(eu ? eu.email : '')}</div></div></div>
+      <p class="hint">Seu nome pode ser diferente em cada grupo: mude nos ajustes ⚙️ de cada um.</p>
+      <button class="secondary danger" type="button" data-action="logout">Sair da conta neste aparelho</button>
+    </div>
+  `;
   if (OUTRA_CASA !== null) renderOutraCasaForm();
 }
 
@@ -1408,7 +1427,7 @@ ACTIONS.alternarPessoais = async el => {
     showToast(ativo ? 'Despesas pessoais ligadas.' : 'Despesas pessoais desligadas.');
   } catch (err) { el.checked = !ativo; onApiError(err); }
 };
-ACTIONS.outraCasa = el => { OUTRA_CASA = el.dataset.modo || null; renderCasa(); };
+ACTIONS.outraCasa = el => { OUTRA_CASA = el.dataset.modo || null; renderMeusGrupos(); };
 async function abrirOutraCasa(fn, msg) {
   const user = Firebase.usuarioAtual();
   const casa = await fn();

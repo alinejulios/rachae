@@ -168,15 +168,26 @@ header.topbar {
   background: var(--surface-1); border-bottom: 1px solid var(--card-border);
   position: sticky; top: 0; z-index: 10;
 }
-header.topbar .who { font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 9px; min-width: 0; }
-header.topbar .who > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+header.topbar .who {
+  font: inherit; font-weight: 700; font-size: 16px; display: flex; align-items: center; gap: 9px; min-width: 0;
+  background: none; border: none; padding: 4px 6px 4px 0; margin: 0; color: var(--text-primary); text-align: left; cursor: pointer; border-radius: 10px;
+}
+header.topbar .who:active { background: var(--surface-2); }
+header.topbar .who-text { display: flex; flex-direction: column; min-width: 0; }
+header.topbar .who-grupo { display: flex; align-items: center; gap: 4px; font-family: var(--font-display); font-weight: 600; min-width: 0; }
+header.topbar .who-grupo #who-casa { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+header.topbar .who-chevron { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-muted); }
+.escopo { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: var(--surface-1);
+  border: 1px dashed var(--card-border); color: var(--text-secondary); font-size: 13px; margin-bottom: 14px; }
+.page-title { font-family: var(--font-display); font-size: 22px; font-weight: 700; margin: 4px 0 4px; }
+.page-sub { color: var(--text-secondary); font-size: 14px; margin: 0 0 14px; }
 header.topbar .who-badge {
   width: 32px; height: 32px; border-radius: 10px; flex-shrink: 0;
   background: linear-gradient(155deg, var(--brand-blue), var(--brand-aqua));
   display: flex; align-items: center; justify-content: center;
 }
 header.topbar .who-badge svg { width: 18px; height: 18px; }
-header.topbar .who-sub { color: var(--text-secondary); font-weight: 400; font-size: 12px; display: block; }
+header.topbar .who-sub { color: var(--text-secondary); font-weight: 400; font-size: 12px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 #grupo-switcher {
   width: auto; border: 1px solid var(--card-border); border-radius: 10px; padding: 7px 8px;
