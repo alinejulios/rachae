@@ -384,7 +384,7 @@ body.on-login #toast { bottom: calc(24px + var(--safe-bottom)); }
 
 /* ---------- Parcelas / atalhos ---------- */
 .parcelas-lista { margin: 8px 0 4px; border: 1px solid var(--card-border); border-radius: 12px; padding: 4px 12px; }
-.parcela-row { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--gridline); font-size: 14px; font-variant-numeric: tabular-nums; }
+.parcela-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; white-space: nowrap; padding: 8px 0; border-bottom: 1px solid var(--gridline); font-size: 14px; font-variant-numeric: tabular-nums; }
 .parcela-row:last-child { border-bottom: none; }
 .tag-st { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 800; }
 .tag-st.ok { background: var(--good-tint); color: var(--good-text); }

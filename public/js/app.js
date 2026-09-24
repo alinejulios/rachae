@@ -1216,7 +1216,7 @@ ACTIONS.updateSaldoDevedorHint = () => {
       : p.mes < mesAtual ? '<span class="tag-st atraso">atrasada</span>'
       : p.mes === mesAtual ? '<span class="tag-st mes">vence este mês</span>'
       : '<span class="tag-st fut">a vencer</span>';
-    return `<div class="parcela-row"><span>${p.num}ª · ${labelMes(p.mes).replace(' de ', '/')}</span>
+    return `<div class="parcela-row"><span>${p.num}ª · ${MESES_ABREV[Number(p.mes.slice(5, 7)) - 1].toLowerCase()}/${p.mes.slice(0, 4)}</span>
       <span>${p.pago > 0 && p.aberto > 0.004 ? 'falta ' + fmtBRL(p.aberto) : fmtBRL(p.valor)} ${status}</span></div>`;
   }).join('')}</div>` : '';
   // Atalhos: vencidas (até este mês), próxima parcela (adiantar) e quitar tudo
