@@ -100,23 +100,64 @@ export async function sair() {
   if (auth) await signOut(auth);
 }
 
-// ------------------------------------------------------------------ casa (household)
-/** Carrega a casa do usuário logado e começa a escutar os dados em tempo real. Null se não tem casa. */
-export const carregarCasa = () => tenta(async () => {
+// ------------------------------------------------------------------ casas (households)
+// Uma pessoa pode fazer parte de várias casas. O perfil users/{uid} guarda a
+// lista (casas) e qual está aberta (casaAtual). Quem manda de verdade é o
+// registro em households/{hid}/membros/{uid} — o perfil é só um índice.
+async function lerPerfil(uid) {
+  const snap = await getDoc(doc(fs, 'users', uid));
+  const d = snap.exists() ? snap.data() : {};
+  const casas = Array.isArray(d.casas) ? d.casas.slice() : (d.householdId ? [d.householdId] : []);
+  const atual = d.casaAtual || d.householdId || casas[0] || null;
+  return { casas, atual };
+}
+async function salvarPerfil(uid, casas, atual) {
+  await setDoc(doc(fs, 'users', uid), { casas: [...new Set(casas)].slice(0, 20), casaAtual: atual || '' });
+}
+
+/** Lista as casas da pessoa (id, nome, se é dona). Ignora casas das quais foi removida. */
+export const minhasCasas = () => tenta(async () => {
+  const u = usuarioAtual();
+  const { casas, atual } = await lerPerfil(u.uid);
+  const out = [];
+  for (const hid of casas) {
+    try {
+      const c = await getDoc(doc(fs, 'households', hid));
+      if (c.exists()) out.push({ id: hid, nome: c.data().nome, souDono: c.data().ownerUid === u.uid, atual: hid === atual });
+    } catch (e) { /* sem permissão: foi removida dessa casa */ }
+  }
+  return out.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+});
+
+/**
+ * Abre uma casa (ou a última aberta, se hid for omitido) e começa a escutar os
+ * dados em tempo real. Null se a pessoa não tem nenhuma casa acessível.
+ */
+export const carregarCasa = (hidDesejada) => tenta(async () => {
   const u = usuarioAtual();
   if (!u) throw new ApiError('Entre novamente.', 'AUTH');
-  const perfil = await getDoc(doc(fs, 'users', u.uid));
-  const hid = perfil.exists() ? perfil.data().householdId : null;
-  if (!hid) return null;
-  let casaSnap;
-  try { casaSnap = await getDoc(doc(fs, 'households', hid)); }
-  catch (e) { if (e.code === 'permission-denied') return null; throw e; } // foi removida da casa
-  if (!casaSnap.exists()) return null;
-  CASA = { id: hid, ...casaSnap.data() };
-  const eu = await getDoc(doc(fs, 'households', hid, 'membros', u.uid));
-  if (!eu.exists()) { CASA = null; return null; }
-  await escutarDados(hid);
-  return { ...CASA, meuNome: eu.data().nome, souDono: souDono() };
+  const perfil = await lerPerfil(u.uid);
+  const candidatas = [hidDesejada || perfil.atual, ...perfil.casas].filter(Boolean);
+  for (const hid of [...new Set(candidatas)]) {
+    let casaSnap, eu;
+    try {
+      casaSnap = await getDoc(doc(fs, 'households', hid));
+      eu = await getDoc(doc(fs, 'households', hid, 'membros', u.uid));
+    } catch (e) {
+      if (e.code === 'permission-denied') continue; // foi removida dessa casa
+      throw e;
+    }
+    if (!casaSnap.exists() || !eu.exists()) continue;
+    CASA = { id: hid, ...casaSnap.data() };
+    await escutarDados(hid);
+    if (perfil.atual !== hid || !perfil.casas.includes(hid)) {
+      await salvarPerfil(u.uid, [...perfil.casas, hid], hid).catch(() => {});
+    }
+    return { ...CASA, meuNome: eu.data().nome, souDono: souDono() };
+  }
+  pararEscuta();
+  CASA = null; DB = null;
+  return null;
 });
 
 function gerarCodigo(n = 10) {
@@ -143,7 +184,8 @@ export const criarCasa = (nomeCasa, meuNome) => tenta(async () => {
     categorias: CATEGORIAS_PADRAO, segmentos: SEGMENTOS_PADRAO, criadoEm: serverTimestamp()
   });
   b1.set(doc(fs, 'households', casaRef.id, 'membros', u.uid), { nome, email: u.email, convite: '', entrouEm: serverTimestamp() });
-  b1.set(doc(fs, 'users', u.uid), { householdId: casaRef.id });
+  const perfil = await lerPerfil(u.uid);
+  b1.set(doc(fs, 'users', u.uid), { casas: [...new Set([...perfil.casas, casaRef.id])].slice(0, 20), casaAtual: casaRef.id });
   await b1.commit();
   // 2º lote: já como membro/dono — grupo padrão e convite
   const b2 = writeBatch(fs);
@@ -152,7 +194,7 @@ export const criarCasa = (nomeCasa, meuNome) => tenta(async () => {
   b2.set(doc(fs, 'convites', codigo), { householdId: casaRef.id, ativo: true, criadoEm: serverTimestamp() });
   await b2.commit();
   await salvarConviteAtual(casaRef.id, codigo);
-  return carregarCasa();
+  return carregarCasa(casaRef.id);
 });
 
 // O código de convite atual fica guardado só no aparelho de quem é dono (o
@@ -196,15 +238,36 @@ export const entrarComConvite = (codigo, meuNome) => tenta(async () => {
   const conv = await getDoc(doc(fs, 'convites', cod));
   if (!conv.exists() || !conv.data().ativo) throw new ApiError('Código de convite inválido ou já desativado.');
   const hid = conv.data().householdId;
-  const b = writeBatch(fs);
-  b.set(doc(fs, 'households', hid, 'membros', u.uid), { nome, email: u.email, convite: cod, entrouEm: serverTimestamp() });
-  b.set(doc(fs, 'users', u.uid), { householdId: hid });
-  await b.commit();
-  const casa = await carregarCasa();
-  if (DB && DB.membros.some(m => m.uid !== u.uid && m.nome.toLowerCase() === nome.toLowerCase())) {
-    await updateDoc(doc(fs, 'households', hid, 'membros', u.uid), { nome: nome + ' ' + u.email[0].toUpperCase() });
+  const perfil = await lerPerfil(u.uid);
+  // Já faz parte dessa casa? Só abre.
+  let jaSouMembro = false;
+  try { jaSouMembro = (await getDoc(doc(fs, 'households', hid, 'membros', u.uid))).exists(); } catch (e) {}
+  if (!jaSouMembro) {
+    const b = writeBatch(fs);
+    b.set(doc(fs, 'households', hid, 'membros', u.uid), { nome, email: u.email, convite: cod, entrouEm: serverTimestamp() });
+    b.set(doc(fs, 'users', u.uid), { casas: [...new Set([...perfil.casas, hid])].slice(0, 20), casaAtual: hid });
+    await b.commit();
+  }
+  const casa = await carregarCasa(hid);
+  if (!jaSouMembro && DB && DB.membros.some(m => m.uid !== u.uid && m.nome.toLowerCase() === nome.toLowerCase())) {
+    const novoNome = (nome + ' ' + u.email[0].toUpperCase()).slice(0, 20);
+    await updateDoc(doc(fs, 'households', hid, 'membros', u.uid), { nome: novoNome });
+    casa.meuNome = novoNome;
   }
   return casa;
+});
+
+/** Sair de uma casa (quem não é dono). Os lançamentos continuam no histórico dela. */
+export const sairDaCasa = () => tenta(async () => {
+  const u = usuarioAtual();
+  if (souDono()) throw new ApiError('Quem criou a casa não pode sair dela.');
+  const hid = CASA.id;
+  await deleteDoc(doc(fs, 'households', hid, 'membros', u.uid));
+  const perfil = await lerPerfil(u.uid);
+  const resto = perfil.casas.filter(x => x !== hid);
+  await salvarPerfil(u.uid, resto, resto[0] || '');
+  pararEscuta();
+  CASA = null; DB = null;
 });
 
 // ------------------------------------------------------------------ dados em tempo real
@@ -350,6 +413,39 @@ const ACOES = {
         { nome: n, tipo, todos: false, membros: uids, criadoPor: usuarioAtual().uid });
     }
     return { ok: true };
+  },
+  async excluirGrupo({ id }) {
+    const g = DB.grupos.find(x => x.id === id);
+    if (!g) throw new ApiError('Grupo não encontrado.');
+    if (g.todos) throw new ApiError('O grupo com todos da casa não pode ser excluído.');
+    const u = usuarioAtual().uid;
+    const despesas = DB.despesas.filter(d => d.grupoId === id);
+    const compras = DB.compras.filter(c => c.grupoId === id);
+    const idsCompras = new Set(compras.map(c => c.id));
+    const pagamentos = DB.pagamentos.filter(p => idsCompras.has(p.compraId));
+    const temLancamentos = despesas.length + compras.length + pagamentos.length > 0;
+    if (!souDono() && g.criadoPor !== u) throw new ApiError('Só quem criou o grupo (ou o dono da casa) pode excluí-lo.');
+    if (temLancamentos && !souDono()) {
+      throw new ApiError('Esse grupo tem lançamentos. Só o dono da casa pode excluí-lo junto com eles.');
+    }
+    // Apaga lançamentos (pagamentos antes das compras) e por último o grupo; lotes de até 450
+    const refs = [
+      ...pagamentos.map(p => doc(fs, 'households', CASA.id, 'pagamentos', p.id)),
+      ...compras.map(c => doc(fs, 'households', CASA.id, 'compras', c.id)),
+      ...despesas.map(d => doc(fs, 'households', CASA.id, 'despesas', d.id)),
+      doc(fs, 'households', CASA.id, 'grupos', id)
+    ];
+    for (let i = 0; i < refs.length; i += 450) {
+      const b = writeBatch(fs);
+      refs.slice(i, i + 450).forEach(r => b.delete(r));
+      await b.commit();
+    }
+    return { ok: true, apagados: refs.length - 1 };
+  },
+  contarLancamentosGrupo({ id }) {
+    const idsCompras = new Set(DB.compras.filter(c => c.grupoId === id).map(c => c.id));
+    return DB.despesas.filter(d => d.grupoId === id).length + idsCompras.size +
+      DB.pagamentos.filter(p => idsCompras.has(p.compraId)).length;
   },
   membros() {
     return DB.membros.map(m => ({ nome: m.nome, email: m.email, uid: m.uid, dono: m.uid === CASA.ownerUid }))

@@ -25,7 +25,7 @@ const store = {
 };
 const K = {
   pessoa: 'rachae_pessoa',
-  grupo: 'rachae_grupo',
+  grupo: 'rachae_grupo', // + '_' + id da casa
   config: 'rachae_cache_config',
   grupos: 'rachae_cache_grupos',
   tags: 'rachae_tags',
@@ -150,10 +150,17 @@ async function init() {
 }
 
 // Depois do login: entra no app se já tem casa, senão pede convite / criar casa
-async function abrirCasa(user) {
+function chaveGrupo() { return K.grupo + '_' + ((STATE.casa && STATE.casa.id) || ''); }
+
+async function abrirCasa(user, hid) {
   mostrarPasso('login-step-loading');
-  const casa = await Firebase.carregarCasa();
+  const casa = await Firebase.carregarCasa(hid);
   if (!casa) {
+    STATE.pessoa = null;
+    STATE.casa = null;
+    document.body.classList.add('on-login');
+    $('screen-app').classList.add('hidden');
+    $('screen-login').classList.remove('hidden');
     $('sem-casa-nome').textContent = user.displayName || user.email;
     if (CONVITE_URL) $('convite-codigo').value = CONVITE_URL;
     mostrarPasso('step-sem-casa');
@@ -321,7 +328,7 @@ async function loadGrupos() {
 }
 function applyGrupos(grupos) {
   STATE.grupos = grupos || [];
-  const saved = store.get(K.grupo);
+  const saved = store.get(chaveGrupo());
   const meusGrupos = STATE.grupos.filter(g => g.membros.indexOf(STATE.pessoa) >= 0);
   STATE.grupoAtual = (saved && STATE.grupos.some(g => g.nome === saved)) ? saved
     : (meusGrupos[0] ? meusGrupos[0].nome : (STATE.grupos[0] ? STATE.grupos[0].nome : null));
@@ -335,7 +342,7 @@ function renderGrupoSwitcher() {
 }
 ACTIONS.onGrupoSwitch = sel => {
   STATE.grupoAtual = sel.value;
-  store.set(K.grupo, sel.value);
+  store.set(chaveGrupo(), sel.value);
   refreshCurrentTabData();
 };
 function refreshCurrentTabData() {
@@ -449,7 +456,7 @@ async function loadDashboard() {
     STATE.dashboard = d;
     if (d.grupoAtual && d.grupoAtual !== STATE.grupoAtual) {
       STATE.grupoAtual = d.grupoAtual;
-      store.set(K.grupo, d.grupoAtual);
+      store.set(chaveGrupo(), d.grupoAtual);
       renderGrupoSwitcher();
     }
     renderDashboard(d);
@@ -1117,10 +1124,26 @@ async function renderCasa() {
   const convite = dono ? Firebase.conviteAtual() : null;
   const link = convite ? location.origin + location.pathname + '?convite=' + convite : '';
   const eu = Firebase.usuarioAtual();
+  const casas = await Firebase.minhasCasas().catch(() => []);
 
   el.innerHTML = `
     <div class="card">
-      <h3>${h(casa.nome)}</h3>
+      <h3>Minhas casas</h3>
+      ${casas.map(c => `
+        <div class="list-row">
+          <div>${h(c.nome)}${c.souDono ? '<span class="badge">admin</span>' : ''}${c.id === casa.id ? '<span class="badge">aberta</span>' : ''}</div>
+          ${c.id !== casa.id ? `<button type="button" class="del-btn" data-action="trocarCasa" data-id="${h(c.id)}">Abrir</button>` : ''}
+        </div>`).join('')}
+      <div id="outra-casa-form"></div>
+      ${OUTRA_CASA === null ? `
+        <div class="btn-row">
+          <button class="secondary" type="button" data-action="outraCasa" data-modo="criar">+ Criar casa</button>
+          <button class="secondary" type="button" data-action="outraCasa" data-modo="convite">Entrar com convite</button>
+        </div>` : ''}
+    </div>
+
+    <div class="card">
+      <h3>Moradores de ${h(casa.nome)}</h3>
       ${membros.map(m => `
         <div class="list-row">
           <div>${h(m.nome)}${m.dono ? '<span class="badge">admin</span>' : ''}${m.uid === eu.uid ? '<span class="badge">você</span>' : ''}
@@ -1160,11 +1183,88 @@ async function renderCasa() {
     <div class="card">
       <h3>Conta</h3>
       <p class="hint" style="margin-top:0">Entrou como ${h(eu.email)}</p>
+      ${!dono ? `<button class="secondary danger" type="button" data-action="sairDaCasa">Sair da casa ${h(casa.nome)}</button>` : ''}
       <button class="secondary danger" type="button" data-action="logout">Sair deste aparelho</button>
     </div>
   `;
   if (GRUPO_EDITANDO !== null) renderGrupoForm(grupos.find(g => g.id === GRUPO_EDITANDO) || null);
+  if (OUTRA_CASA !== null) renderOutraCasaForm();
 }
+
+// ---------- Várias casas ----------
+let OUTRA_CASA = null; // null | 'criar' | 'convite'
+function renderOutraCasaForm() {
+  $('outra-casa-form').innerHTML = OUTRA_CASA === 'criar' ? `
+    <form data-submit="criarOutraCasa" novalidate>
+      <label for="outra-casa-nome">Nome da nova casa</label>
+      <input type="text" id="outra-casa-nome" maxlength="40" placeholder="Ex.: Casa da praia" autocapitalize="sentences">
+      <div class="btn-row">
+        <button class="secondary" type="button" data-action="outraCasa" data-modo="">Cancelar</button>
+        <button class="primary" type="submit">Criar</button>
+      </div>
+    </form>` : `
+    <form data-submit="entrarOutraCasa" novalidate>
+      <label for="outra-casa-convite">Código de convite</label>
+      <input type="text" id="outra-casa-convite" maxlength="20" placeholder="ABCD234567" autocapitalize="characters"
+             autocomplete="off" autocorrect="off" spellcheck="false" style="text-transform:uppercase;letter-spacing:2px;font-weight:700">
+      <div class="btn-row">
+        <button class="secondary" type="button" data-action="outraCasa" data-modo="">Cancelar</button>
+        <button class="primary" type="submit">Entrar</button>
+      </div>
+    </form>`;
+  const input = $('outra-casa-form').querySelector('input');
+  if (input) input.focus();
+}
+ACTIONS.outraCasa = el => { OUTRA_CASA = el.dataset.modo || null; renderCasa(); };
+async function abrirOutraCasa(fn, msg) {
+  const user = Firebase.usuarioAtual();
+  const casa = await fn();
+  OUTRA_CASA = null;
+  GRUPO_EDITANDO = null;
+  STATE.casa = casa;
+  STATE.config = await api('config');
+  STATE.grupoAtual = null;
+  enterApp(casa.meuNome);
+  showToast(msg);
+  return user;
+}
+ACTIONS.criarOutraCasa = async form => {
+  const nome = $('outra-casa-nome').value.trim();
+  if (!nome) { showToast('Dê um nome para a casa.', true); return; }
+  const user = Firebase.usuarioAtual();
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      await abrirOutraCasa(() => Firebase.criarCasa(nome, STATE.pessoa || user.displayName || user.email.split('@')[0]),
+        'Casa criada! Convide os moradores abaixo.');
+      switchTab('casa');
+    } catch (err) { onApiError(err); }
+  });
+};
+ACTIONS.entrarOutraCasa = async form => {
+  const codigo = $('outra-casa-convite').value.trim();
+  if (!codigo) { showToast('Digite o código de convite.', true); return; }
+  const user = Firebase.usuarioAtual();
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      await abrirOutraCasa(() => Firebase.entrarComConvite(codigo, STATE.pessoa || user.displayName || user.email.split('@')[0]),
+        'Você entrou na casa!');
+    } catch (err) { onApiError(err); }
+  });
+};
+ACTIONS.trocarCasa = async el => {
+  try {
+    await abrirOutraCasa(() => Firebase.carregarCasa(el.dataset.id), 'Casa aberta.');
+  } catch (err) { onApiError(err); }
+};
+ACTIONS.sairDaCasa = async () => {
+  const nome = STATE.casa ? STATE.casa.nome : 'esta casa';
+  if (!confirm('Sair de "' + nome + '"? Você deixa de ver os dados dela; seus lançamentos continuam no histórico da casa.')) return;
+  try {
+    await Firebase.sairDaCasa();
+    showToast('Você saiu da casa.');
+    await abrirCasa(Firebase.usuarioAtual());
+  } catch (err) { onApiError(err); }
+};
 function renderGrupoForm(grupo) {
   const nomes = STATE.config.names;
   $('grupo-form').innerHTML = `
@@ -1182,9 +1282,24 @@ function renderGrupoForm(grupo) {
         <button class="secondary" type="button" data-action="cancelarGrupo">Cancelar</button>
         <button class="primary" type="submit">Salvar</button>
       </div>
+      ${grupo ? `<button class="secondary danger" type="button" data-action="excluirGrupo" data-id="${h(grupo.id)}" data-nome="${h(grupo.nome)}">Excluir grupo</button>` : ''}
     </form>`;
   $('grupo-nome').focus();
 }
+ACTIONS.excluirGrupo = async el => {
+  const n = await api('contarLancamentosGrupo', { id: el.dataset.id });
+  const aviso = n
+    ? 'Excluir o grupo "' + el.dataset.nome + '" e APAGAR os ' + n + ' lançamento(s) dele? Isso não pode ser desfeito.'
+    : 'Excluir o grupo "' + el.dataset.nome + '"?';
+  if (!confirm(aviso)) return;
+  try {
+    await api('excluirGrupo', { id: el.dataset.id });
+    GRUPO_EDITANDO = null;
+    applyGrupos(await api('grupos'));
+    showToast('Grupo excluído.');
+    renderCasa();
+  } catch (err) { onApiError(err); }
+};
 ACTIONS.editarGrupo = el => { GRUPO_EDITANDO = el.dataset.id || ''; renderCasa(); };
 ACTIONS.cancelarGrupo = () => { GRUPO_EDITANDO = null; renderCasa(); };
 ACTIONS.salvarGrupo = async form => {

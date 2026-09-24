@@ -94,5 +94,6 @@ ser conferidos sem Firebase, direto no Node, importando `public/js/calc.js`.
 - **Funciona offline:** dá para abrir e consultar sem internet; o que for lançado sincroniza depois.
 - **Login com senha**, "esqueci a senha" e entrada na casa **por convite**; o dono pode remover pessoas.
 - **Apagar lançamentos:** cada pessoa apaga o que lançou (o dono da casa apaga qualquer um).
-- **Grupos** (ex.: "Viagem") criados pelo próprio app, na tela Casa.
+- **Grupos** (ex.: "Viagem") criados, editados e excluídos pelo próprio app, na tela Casa.
+- **Várias casas por pessoa:** crie ou entre em outras casas e troque entre elas na tela Casa.
 - Sem limite de 5 moradores.

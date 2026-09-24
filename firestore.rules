@@ -5,7 +5,7 @@ rules_version = '2';
 // No plano Spark não há Cloud Functions: TODA a proteção dos dados está aqui.
 //
 // Modelo:
-//   users/{uid}                          → { householdId }          (só o próprio usuário)
+//   users/{uid}                          → { casas[], casaAtual }   (só o próprio usuário)
 //   convites/{codigo}                    → { householdId, ativo }   (quem sabe o código consegue ler)
 //   households/{hid}                     → casa: nome, dono, listas (categorias etc.)
 //   households/{hid}/membros/{uid}       → { nome, email, convite, entrouEm }
@@ -33,9 +33,11 @@ service cloud.firestore {
     // ---------------------------------------------------------------- perfil
     match /users/{userId} {
       allow read, delete: if signedIn() && uid() == userId;
+      // Índice das casas da pessoa (quem garante o acesso é o registro em membros)
       allow create, update: if signedIn() && uid() == userId
-        && request.resource.data.keys().hasOnly(['householdId'])
-        && str(request.resource.data.householdId, 1, 40);
+        && request.resource.data.keys().hasOnly(['casas', 'casaAtual', 'householdId'])
+        && request.resource.data.casas is list && request.resource.data.casas.size() <= 20
+        && str(request.resource.data.casaAtual, 0, 40);
     }
 
     // ---------------------------------------------------------------- convites
@@ -109,7 +111,9 @@ service cloud.firestore {
         allow update: if isMember(hid) && grupoOk()
           && request.resource.data.criadoPor == resource.data.criadoPor
           && (isOwner(hid) || resource.data.criadoPor == uid());
-        allow delete: if isOwner(hid) || (isMember(hid) && resource.data.criadoPor == uid());
+        // O grupo com todos da casa nunca é excluído
+        allow delete: if !resource.data.todos
+          && (isOwner(hid) || (isMember(hid) && resource.data.criadoPor == uid()));
       }
 
       // -------------------------------------------------------------- despesas
