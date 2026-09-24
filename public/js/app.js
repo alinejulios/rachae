@@ -310,7 +310,10 @@ async function atualizarAoVivo() {
   try {
     STATE.config = await api('config');
     applyGrupos(await api('grupos'));
-    const saiuDaCasa = STATE.config.names.indexOf(STATE.pessoa) === -1;
+    const meuNome = await api('meuNome');
+    if (meuNome && meuNome !== STATE.pessoa) { STATE.pessoa = meuNome; $('who-name').textContent = meuNome; }
+    if (STATE.casa) $('who-casa').textContent = Firebase.casaAtual().nome;
+    const saiuDaCasa = !meuNome;
     if (saiuDaCasa) { showToast('Você não faz mais parte deste grupo.', true); goToLogin(); return; }
     if (['dashboard', 'historico', 'casa'].includes(STATE.currentTab)) refreshCurrentTabData();
   } catch (err) { /* sem conexão: tenta na próxima mudança */ }
@@ -341,6 +344,7 @@ function renderGrupoSwitcher() {
   const sel = $('grupo-switcher');
   const opcoes = STATE.grupos.map(g => ({ valor: g.nome, rotulo: g.nome }));
   if (pessoaisLigadas()) opcoes.push({ valor: PESSOAL, rotulo: 'Pessoal (só você)' });
+  sel.classList.toggle('hidden', opcoes.length <= 1);
   if (!opcoes.length) { sel.innerHTML = '<option value="">Sem conjuntos</option>'; return; }
   sel.innerHTML = opcoes.map(o =>
     `<option value="${h(o.valor)}" ${o.valor === STATE.grupoAtual ? 'selected' : ''}>${h(o.rotulo)}</option>`).join('');
@@ -1267,10 +1271,46 @@ async function renderCasa() {
 
   el.innerHTML = `
     <div class="card">
-      <h3>Meus grupos</h3>
+      <div class="chart-head">
+        <h3>Grupo aberto</h3>
+      </div>
+      ${EDITANDO_NOME === 'grupo' ? `
+        <form data-submit="salvarNomeGrupo" novalidate>
+          <label for="nome-grupo-input">Nome do grupo</label>
+          <input type="text" id="nome-grupo-input" maxlength="40" value="${h(casa.nome)}" autocapitalize="sentences">
+          <div class="btn-row">
+            <button class="secondary" type="button" data-action="editarNome" data-qual="">Cancelar</button>
+            <button class="primary" type="submit">Salvar</button>
+          </div>
+        </form>` : `
+        <div class="list-row">
+          <div style="font-family:var(--font-display);font-size:20px;font-weight:700">${h(casa.nome)}</div>
+          ${dono ? '<button type="button" class="del-btn" data-action="editarNome" data-qual="grupo">Editar nome</button>' : ''}
+        </div>`}
+      <span class="field-label">Pessoas</span>
+      ${membros.map(m => `
+        <div class="list-row">
+          <div>${h(m.nome)}${m.dono ? '<span class="badge">admin</span>' : ''}${m.uid === eu.uid ? '<span class="badge">você</span>' : ''}
+            <div class="sub">${h(m.email)}</div></div>
+          ${m.uid === eu.uid ? '<button type="button" class="del-btn" data-action="editarNome" data-qual="eu">Mudar meu nome</button>'
+            : (dono && !m.dono ? `<button type="button" class="del-btn" data-action="removerMembro" data-uid="${h(m.uid)}" data-nome="${h(m.nome)}">Remover</button>` : '')}
+        </div>`).join('')}
+      ${EDITANDO_NOME === 'eu' ? `
+        <form data-submit="salvarMeuNome" novalidate>
+          <label for="meu-nome-input">Seu nome neste grupo</label>
+          <input type="text" id="meu-nome-input" maxlength="20" value="${h(STATE.pessoa || '')}" autocapitalize="words">
+          <div class="btn-row">
+            <button class="secondary" type="button" data-action="editarNome" data-qual="">Cancelar</button>
+            <button class="primary" type="submit">Salvar</button>
+          </div>
+        </form>` : ''}
+    </div>
+
+    <div class="card">
+      <h3>Trocar de grupo</h3>
       ${casas.map(c => `
         <div class="list-row">
-          <div>${h(c.nome)}${c.souDono ? '<span class="badge">admin</span>' : ''}${c.id === casa.id ? '<span class="badge">aberta</span>' : ''}</div>
+          <div>${h(c.nome)}${c.souDono ? '<span class="badge">admin</span>' : ''}${c.id === casa.id ? '<span class="badge">aberto</span>' : ''}</div>
           ${c.id !== casa.id ? `<button type="button" class="del-btn" data-action="trocarCasa" data-id="${h(c.id)}">Abrir</button>` : ''}
         </div>`).join('')}
       <div id="outra-casa-form"></div>
@@ -1279,16 +1319,6 @@ async function renderCasa() {
           <button class="secondary" type="button" data-action="outraCasa" data-modo="criar">+ Criar grupo</button>
           <button class="secondary" type="button" data-action="outraCasa" data-modo="convite">Entrar com convite</button>
         </div>` : ''}
-    </div>
-
-    <div class="card">
-      <h3>Pessoas em ${h(casa.nome)}</h3>
-      ${membros.map(m => `
-        <div class="list-row">
-          <div>${h(m.nome)}${m.dono ? '<span class="badge">admin</span>' : ''}${m.uid === eu.uid ? '<span class="badge">você</span>' : ''}
-            <div class="sub">${h(m.email)}</div></div>
-          ${dono && !m.dono ? `<button type="button" class="del-btn" data-action="removerMembro" data-uid="${h(m.uid)}" data-nome="${h(m.nome)}">Remover</button>` : ''}
-        </div>`).join('')}
     </div>
 
     ${dono ? `
@@ -1312,8 +1342,8 @@ async function renderCasa() {
       ${grupos.map(g => `
         <div class="list-row">
           <div>${h(g.nome)}${g.todos ? '<span class="badge">todos</span>' : ''}
-            <div class="sub">${h(g.tipo)} · ${g.membros.map(h).join(', ') || 'ninguém'}</div></div>
-          ${!g.todos && (dono || g.criadoPor === eu.uid) ? `<button type="button" class="del-btn" data-action="editarGrupo" data-id="${h(g.id)}">Editar</button>` : ''}
+            <div class="sub">${g.todos ? 'Todo mundo do grupo' : (g.membros.map(h).join(', ') || 'ninguém')}</div></div>
+          ${(g.todos ? dono : (dono || g.criadoPor === eu.uid)) ? `<button type="button" class="del-btn" data-action="editarGrupo" data-id="${h(g.id)}">Editar</button>` : ''}
         </div>`).join('')}
       <div id="grupo-form"></div>
       ${GRUPO_EDITANDO === null ? '<button class="secondary" type="button" data-action="editarGrupo" data-id="">+ Novo conjunto</button>' : ''}
@@ -1434,16 +1464,17 @@ function renderGrupoForm(grupo) {
     <form data-submit="salvarGrupo" novalidate>
       <label for="grupo-nome">${grupo ? 'Editar conjunto' : 'Novo conjunto de despesas'}</label>
       <input type="text" id="grupo-nome" maxlength="30" placeholder="Ex.: Contas fixas, Viagem" value="${grupo ? h(grupo.nome) : ''}">
+      ${grupo && grupo.todos ? '<p class="hint">Este conjunto sempre inclui todo mundo do grupo (e quem entrar depois).</p>' : `
       <span class="field-label">Quem faz parte</span>
       <div class="participa-grid">
         ${nomes.map(n => `<label class="participa-item"><input type="checkbox" class="grupo-membro" data-nome="${h(n)}"
           ${(grupo ? grupo.membros.includes(n) : n === STATE.pessoa) ? 'checked' : ''}> ${h(n)}</label>`).join('')}
-      </div>
+      </div>`}
       <div class="btn-row">
         <button class="secondary" type="button" data-action="cancelarGrupo">Cancelar</button>
         <button class="primary" type="submit">Salvar</button>
       </div>
-      ${grupo ? `<button class="secondary danger" type="button" data-action="excluirGrupo" data-id="${h(grupo.id)}" data-nome="${h(grupo.nome)}">Excluir conjunto</button>` : ''}
+      ${grupo && !grupo.todos ? `<button class="secondary danger" type="button" data-action="excluirGrupo" data-id="${h(grupo.id)}" data-nome="${h(grupo.nome)}">Excluir conjunto</button>` : ''}
     </form>`;
   $('grupo-nome').focus();
 }
@@ -1460,6 +1491,39 @@ ACTIONS.excluirGrupo = async el => {
     showToast('Conjunto excluído.');
     renderCasa();
   } catch (err) { onApiError(err); }
+};
+let EDITANDO_NOME = ''; // '' | 'grupo' | 'eu'
+ACTIONS.editarNome = el => {
+  EDITANDO_NOME = el.dataset.qual || '';
+  renderCasa().then(() => {
+    const input = $(EDITANDO_NOME === 'grupo' ? 'nome-grupo-input' : 'meu-nome-input');
+    if (input) { input.focus(); input.select(); }
+  });
+};
+ACTIONS.salvarNomeGrupo = async form => {
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      await api('renomearGrupo', { nome: $('nome-grupo-input').value });
+      STATE.casa.nome = Firebase.casaAtual().nome;
+      $('who-casa').textContent = STATE.casa.nome;
+      EDITANDO_NOME = '';
+      showToast('Nome do grupo atualizado.');
+      renderCasa();
+    } catch (err) { onApiError(err); }
+  });
+};
+ACTIONS.salvarMeuNome = async form => {
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      const res = await api('renomearMe', { nome: $('meu-nome-input').value });
+      STATE.pessoa = res.nome;
+      store.set(K.pessoa, res.nome);
+      $('who-name').textContent = res.nome;
+      EDITANDO_NOME = '';
+      showToast('Seu nome foi atualizado.');
+      setTimeout(renderCasa, 400);
+    } catch (err) { onApiError(err); }
+  });
 };
 ACTIONS.editarGrupo = el => { GRUPO_EDITANDO = el.dataset.id || ''; renderCasa(); };
 ACTIONS.cancelarGrupo = () => { GRUPO_EDITANDO = null; renderCasa(); };

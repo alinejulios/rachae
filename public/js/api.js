@@ -451,9 +451,15 @@ const ACOES = {
     if (!n) throw new ApiError('Dê um nome ao conjunto.');
     if (DB.grupos.some(g => g.id !== id && g.nome.toLowerCase() === n.toLowerCase())) throw new ApiError('Já existe um conjunto com esse nome.');
     const uids = (membros || []).map(uidPorNome);
+    const atual = id ? DB.grupos.find(g => g.id === id) : null;
+    if (atual && atual.todos) {
+      // Conjunto com todos do grupo: só o nome muda (quem participa é sempre todo mundo)
+      await setDoc(doc(fs, 'households', CASA.id, 'grupos', id),
+        { nome: n, tipo: atual.tipo || 'Compartilhado', todos: true, membros: [], criadoPor: atual.criadoPor });
+      return { ok: true };
+    }
     if (!uids.length) throw new ApiError('Marque pelo menos uma pessoa no conjunto.');
     if (id) {
-      const atual = DB.grupos.find(g => g.id === id);
       await setDoc(doc(fs, 'households', CASA.id, 'grupos', id),
         { nome: n, tipo, todos: false, membros: uids, criadoPor: atual.criadoPor });
     } else {
@@ -500,6 +506,27 @@ const ACOES = {
     await updateDoc(doc(fs, 'households', CASA.id), { despesasPessoais: !!ativo });
     CASA.despesasPessoais = !!ativo;
     return { ok: true };
+  },
+  meuNome() {
+    const eu = DB.membros.find(m => m.uid === usuarioAtual().uid);
+    return eu ? eu.nome : null;
+  },
+  async renomearGrupo({ nome }) {
+    if (!souDono()) throw new ApiError('Só quem administra o grupo pode mudar o nome.');
+    const n = String(nome || '').trim().slice(0, 40);
+    if (!n) throw new ApiError('Dê um nome ao grupo.');
+    await updateDoc(doc(fs, 'households', CASA.id), { nome: n });
+    CASA.nome = n;
+    return { ok: true };
+  },
+  async renomearMe({ nome }) {
+    const n = validarNome(nome);
+    const u = usuarioAtual().uid;
+    if (DB.membros.some(m => m.uid !== u && m.nome.toLowerCase() === n.toLowerCase())) {
+      throw new ApiError('Já tem alguém com esse nome no grupo. Use um sobrenome ou apelido.');
+    }
+    await updateDoc(doc(fs, 'households', CASA.id, 'membros', u), { nome: n });
+    return { ok: true, nome: n };
   },
   membros() {
     return DB.membros.map(m => ({ nome: m.nome, email: m.email, uid: m.uid, dono: m.uid === CASA.ownerUid }))
