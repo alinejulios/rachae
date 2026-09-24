@@ -368,3 +368,16 @@ body.on-login #toast { bottom: calc(24px + var(--safe-bottom)); }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation-duration: 0s !important; }
 }
+
+/* ---------- Pix ---------- */
+.pix-painel { display: flex; gap: 14px; align-items: center; padding: 12px; border-radius: 14px; background: var(--surface-2); }
+.pix-qr { width: 132px; height: 132px; flex-shrink: 0; background: #fff; border-radius: 10px; padding: 4px; }
+.pix-qr svg { width: 100%; height: 100%; display: block; }
+.pix-info { min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+.pix-para { font-weight: 800; }
+.pix-valor { font-family: var(--font-display); font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.acerto-item { border-bottom: 1px solid var(--gridline); padding-bottom: 10px; margin-bottom: 6px; }
+.acerto-item:last-child { border-bottom: none; }
+.acerto-item .list-row { border-bottom: none; }
+.acerto-valor { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.acerto-pix { margin-top: 6px; }

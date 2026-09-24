@@ -19,6 +19,7 @@ import {
   doc, getDoc, getDocs, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, writeBatch, serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from '../firebase-config.js';
+import { normalizarChave } from './pix.js';
 import { montarDashboard, montarHistorico, membrosDoGrupo, montarDashboardPessoal, montarHistoricoPessoal } from './calc.js';
 
 /** Valor especial do seletor de conjunto para o conjunto pessoal (privado). */
@@ -437,6 +438,9 @@ const ACOES = {
   },
   dashboard({ grupo }) {
     if (grupo === PESSOAL) return montarDashboardPessoal(DB.pessoais, DB.pessoaisCompras);
+    return comPix(ACOES._dashboard({ grupo }));
+  },
+  _dashboard({ grupo }) {
     const u = usuarioAtual().uid;
     const g = DB.grupos.find(x => x.nome === grupo)
       || DB.grupos.find(x => membrosDoGrupo(x, DB.membros).has(u)) || DB.grupos[0];
@@ -568,6 +572,38 @@ const ACOES = {
     CASA.despesasPessoais = !!ativo;
     return { ok: true };
   },
+  async salvarPix({ tipo, chave, nome, cidade }) {
+    const n = normalizarChave(tipo, chave);
+    if (n.erro) throw new ApiError(n.erro);
+    const titular = String(nome || '').trim().slice(0, 25);
+    const cid = String(cidade || '').trim().slice(0, 15);
+    if (!titular) throw new ApiError('Informe o nome do titular da conta (como aparece no banco).');
+    if (!cid) throw new ApiError('Informe a cidade do titular.');
+    return salvarPixEmTodosOsGrupos({ tipo, chave: n.chave, nome: titular, cidade: cid });
+  },
+  async removerPix() {
+    return salvarPixEmTodosOsGrupos(null);
+  },
+  meuPix() {
+    const eu = DB.membros.find(m => m.uid === usuarioAtual().uid);
+    return (eu && eu.pix) || null;
+  },
+  /** Registra que eu paguei alguém (acerto de contas): zera a dívida nos saldos, não conta como gasto. */
+  async registrarAcerto({ para, valor, grupo, mesRef }) {
+    const g = grupoPorNome(grupo);
+    const u = usuarioAtual().uid;
+    if (para === u) throw new ApiError('Não dá para acertar contas consigo mesma(o).');
+    if (!DB.membros.some(m => m.uid === para)) throw new ApiError('Essa pessoa não está mais no grupo.');
+    await addDoc(collection(fs, 'households', CASA.id, 'despesas'), {
+      data: new Date().toISOString().slice(0, 10),
+      descricao: ('Acerto: ' + nomePorUid(u) + ' → ' + nomePorUid(para)).slice(0, 80),
+      categoria: 'Acerto', segmento: 'À Vista', grupoId: g.id, valor: centavos(valor), pagoPor: u,
+      metodo: 'Igual', participantes: [para], divisao: null, acerto: true,
+      mesRef: /^\d{4}-\d{2}$/.test(mesRef || '') ? mesRef : new Date().toISOString().slice(0, 7),
+      criadoPor: u, criadoEm: serverTimestamp()
+    });
+    return { ok: true };
+  },
   meuNome() {
     const eu = DB.membros.find(m => m.uid === usuarioAtual().uid);
     return eu ? eu.nome : null;
@@ -590,7 +626,7 @@ const ACOES = {
     return { ok: true, nome: n };
   },
   membros() {
-    return DB.membros.map(m => ({ nome: m.nome, email: m.email, uid: m.uid, dono: m.uid === CASA.ownerUid }))
+    return DB.membros.map(m => ({ nome: m.nome, email: m.email, uid: m.uid, dono: m.uid === CASA.ownerUid, temPix: !!m.pix }))
       .sort((a, b) => b.dono - a.dono || a.nome.localeCompare(b.nome, 'pt-BR'));
   },
   async removerMembro({ uid }) {
@@ -599,6 +635,27 @@ const ACOES = {
     return { ok: true };
   }
 };
+
+/** Anexa a chave Pix de quem recebe às sugestões de acerto e às compras em aberto. */
+function comPix(d) {
+  const pixDe = uid => { const m = DB.membros.find(x => x.uid === uid); return (m && m.pix) || null; };
+  d.acertos = (d.acertos || []).map(a => ({ ...a, pix: pixDe(a.para) }));
+  Object.values(d.meses || {}).forEach(m => { m.acertos = m.acertos.map(a => ({ ...a, pix: pixDe(a.para) })); });
+  d.comprasEmAberto = (d.comprasEmAberto || []).map(c => ({ ...c, pix: pixDe(c.comprador) }));
+  return d;
+}
+
+/** A chave vale para a pessoa em todos os grupos dela (fica no registro de membro de cada um). */
+async function salvarPixEmTodosOsGrupos(pix) {
+  const u = usuarioAtual().uid;
+  const { casas } = await lerPerfil(u);
+  let ok = 0;
+  for (const hid of [...new Set([CASA.id, ...casas])]) {
+    try { await updateDoc(doc(fs, 'households', hid, 'membros', u), { pix }); ok++; } catch (e) { /* grupo inacessível */ }
+  }
+  if (!ok) throw new ApiError('Não foi possível salvar a chave Pix.');
+  return { ok: true, grupos: ok };
+}
 
 export async function api(action, params = {}) {
   exigirConfig();

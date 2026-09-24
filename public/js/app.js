@@ -1,5 +1,7 @@
 import * as Firebase from './api.js';
 import { api, PESSOAL } from './api.js';
+import { payloadPix, chaveLegivel, TIPOS_CHAVE } from './pix.js';
+import qrcode from '../vendor/qrcode.mjs';
 
 // =================================================================== Estado
 const STATE = {
@@ -484,6 +486,7 @@ function statusIconSvg(kind) {
 }
 function renderDashboard(d) {
   if (d.pessoalMode) { renderDashboardPessoal(d); return; }
+  if (!STATE.mesAcerto || !mesesComSaldo(d).includes(STATE.mesAcerto)) STATE.mesAcerto = mesAtualKey();
   const el = $('tab-dashboard');
   const p = d.pessoal || { saldoGeral: 0, saldoAv: 0, saldoParc: 0 };
   const statusKind = p.saldoGeral > 0.5 ? 'good' : (p.saldoGeral < -0.5 ? 'critical' : 'neutral');
@@ -525,6 +528,21 @@ function renderDashboard(d) {
 
     <div class="card">
       <div class="chart-head">
+        <h3>Acertar as contas</h3>
+        <select class="chart-select" data-change="escolherPeriodoAcerto" aria-label="Período do acerto">
+          ${mesesComSaldo(d).map(m => `<option value="${m}" ${ACERTO_MES === 'mes' && m === STATE.mesAcerto ? 'selected' : ''}>${labelMes(m)}</option>`).join('')}
+          <option value="tudo" ${ACERTO_MES === 'tudo' ? 'selected' : ''}>Tudo (saldo total)</option>
+        </select>
+      </div>
+      <div id="saldo-mes"></div>
+      <p class="hint" style="margin:0 0 10px;">${ACERTO_MES === 'tudo'
+        ? 'O menor número de Pix para deixar todo mundo quitado.'
+        : 'Quem paga quem só pelo que é deste mês. Cada Pix registrado abate o saldo do mês e o total.'}</p>
+      <div id="acertos-lista">${acertosHtml(d)}</div>
+    </div>
+
+    <div class="card">
+      <div class="chart-head">
         <h3>Gastos por mês</h3>
         <select id="ano-select" class="chart-select" data-change="onAnoChange" aria-label="Ano">
           ${anos.map(a => `<option value="${a}" ${a === STATE.anoSelecionado ? 'selected' : ''}>${a}</option>`).join('')}
@@ -557,6 +575,7 @@ function renderDashboard(d) {
 
   renderInstallCard();
   renderSaldoBars(d.saldosPorPessoa || []);
+  renderSaldoMes(d);
   renderChartMensal();
   renderChartCategoriaMes();
   renderChartReembolsos(d.reembolsosPorPessoa || []);
@@ -1120,7 +1139,9 @@ async function renderPagamentoForm() {
       <button class="primary" type="button" data-action="refresh">Tentar de novo</button></div>`;
   }
 }
+let COMPRAS_ABERTAS = [];
 function renderPagamentoFormBody(compras) {
+  COMPRAS_ABERTAS = compras;
   const el = $('tab-pagamento');
   if (!compras.length) {
     el.innerHTML = noPessoal()
@@ -1133,12 +1154,14 @@ function renderPagamentoFormBody(compras) {
       <h3>Registrar pagamento de parcela</h3>
       <label for="pag-compra">Compra</label>
       <select id="pag-compra" data-change="updateSaldoDevedorHint">
-        ${compras.map(c => `<option value="${h(c.id)}" data-saldo="${c.saldoDevedor}">${h(c.descricao)} — ${fmtBRL(c.saldoDevedor)}</option>`).join('')}
+        ${compras.map((c, i) => `<option value="${h(c.id)}" data-i="${i}" data-saldo="${c.saldoDevedor}">${h(c.descricao)} — ${fmtBRL(c.saldoDevedor)}</option>`).join('')}
       </select>
       <p class="hint" id="pag-saldo-hint"></p>
-      <label for="pag-valor">Valor pago</label>
-      ${moneyInput('pag-valor')}
+      <label for="pag-valor">Valor a pagar</label>
+      ${moneyInput('pag-valor', 'data-input="atualizarPixParcela"')}
       <button type="button" class="link-btn" data-action="pagarTudo">Usar saldo total</button>
+      <span class="field-label">Pagar com Pix</span>
+      <div id="pag-pix"></div>
       <label for="pag-data">Data do pagamento</label>
       <input type="date" id="pag-data" value="${todayStr()}">
       <button class="primary" type="submit">Registrar pagamento</button>
@@ -1151,10 +1174,22 @@ function saldoSelecionado() {
   return Number(sel.options[sel.selectedIndex].dataset.saldo) || 0;
 }
 ACTIONS.updateSaldoDevedorHint = () => {
-  $('pag-saldo-hint').textContent = 'Você deve ' + fmtBRL(saldoSelecionado()) + ' nesta compra.';
+  const c = COMPRAS_ABERTAS[Number($('pag-compra').selectedOptions[0].dataset.i)];
+  $('pag-saldo-hint').textContent = 'Você deve ' + fmtBRL(saldoSelecionado()) + ' para ' + (c ? c.compradorNome : 'quem comprou') + ' nesta compra.';
+  ACTIONS.atualizarPixParcela();
+};
+// Valor digitado (ou o saldo todo, se vazio) vai dentro do QR Code
+ACTIONS.atualizarPixParcela = () => {
+  const c = COMPRAS_ABERTAS[Number($('pag-compra').selectedOptions[0].dataset.i)];
+  if (!c) return;
+  const digitado = parseMoney($('pag-valor').value);
+  const valor = digitado > 0 ? digitado : saldoSelecionado();
+  $('pag-pix').innerHTML = pixPainelHtml({ pix: c.pix, valor, paraNome: c.compradorNome }) +
+    '<p class="hint">Depois de pagar no banco, toque em "Registrar pagamento" abaixo.</p>';
 };
 ACTIONS.pagarTudo = () => {
   $('pag-valor').value = saldoSelecionado().toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  ACTIONS.atualizarPixParcela();
 };
 ACTIONS.submitPagamento = async form => {
   const valor = parseMoney($('pag-valor').value);
@@ -1218,8 +1253,9 @@ function renderHistorico(data) {
     </div>
     ${card('despesas', data.despesas.length ? data.despesas.map(d => `
       <div class="hist-item">
-        <div class="top"><span>${h(d.descricao)}</span><span>${fmtBRL(d.valor)}</span></div>
-        <div class="sub">${h(d.data)} · ${h(d.categoria)}${d.segmento ? ' · ' + h(d.segmento) : ''} · pago por ${h(d.pagoPor)} · ${h(d.metodo)}</div>
+        <div class="top"><span>${d.acerto ? '💸 ' : ''}${h(d.descricao)}</span><span>${fmtBRL(d.valor)}</span></div>
+        <div class="sub">${d.acerto ? h(d.data) + ' · acerto de contas via Pix'
+          : `${h(d.data)} · ${h(d.categoria)}${d.segmento ? ' · ' + h(d.segmento) : ''} · pago por ${h(d.pagoPor)} · ${h(d.metodo)}`}</div>
         <div id="tags-desp-${h(d.row)}"></div>
         ${apagarBtn('despesas', d.id, d.podeApagar)}
       </div>`).join('') : '<p class="empty">Nenhuma despesa lançada ainda.</p>')}
@@ -1255,6 +1291,193 @@ ACTIONS.showHistSeg = el => {
   HIST_SEG = el.dataset.seg;
   ['despesas', 'compras', 'pagamentos'].forEach(s => $('hist-' + s).classList.toggle('hidden', s !== HIST_SEG));
   document.querySelectorAll('.segmented button').forEach(b => b.classList.toggle('active', b.dataset.seg === HIST_SEG));
+};
+
+// =================================================================== Pix
+function qrSvg(texto) {
+  const q = qrcode(0, 'M');
+  q.addData(texto);
+  q.make();
+  return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+}
+/**
+ * Cartão de pagamento Pix: QR Code + "Pix Copia e Cola" + chave. Se `valor` vier, o QR já leva o valor.
+ * @param {{pix:object|null, valor?:number, paraNome:string}} o
+ */
+function pixPainelHtml({ pix, valor, paraNome }) {
+  if (!pix) {
+    return `<p class="hint warn">${h(paraNome)} ainda não cadastrou uma chave Pix. Peça para ela(e) cadastrar em ⚙️ Ajustes → Minha chave Pix.</p>`;
+  }
+  let copiaCola = '';
+  try { copiaCola = payloadPix({ chave: pix.chave, nome: pix.nome, cidade: pix.cidade, valor }); }
+  catch (e) { return `<p class="hint error">${h(e.message)}</p>`; }
+  return `
+    <div class="pix-painel">
+      <div class="pix-qr" role="img" aria-label="QR Code Pix para ${h(paraNome)}">${qrSvg(copiaCola)}</div>
+      <div class="pix-info">
+        <div class="pix-para">${h(pix.nome)}</div>
+        <div class="sub">${h(TIPOS_CHAVE[pix.tipo] || 'Chave')}: ${h(chaveLegivel(pix.tipo, pix.chave))}</div>
+        ${valor ? `<div class="pix-valor">${fmtBRL(valor)}</div>` : '<div class="sub">Valor: você digita no app do banco</div>'}
+      </div>
+    </div>
+    <button type="button" class="primary" data-action="copiar" data-texto="${h(copiaCola)}" data-ok="Pix Copia e Cola copiado! Cole no app do seu banco.">Copiar Pix Copia e Cola</button>
+    <button type="button" class="secondary" data-action="copiar" data-texto="${h(pix.chave)}" data-ok="Chave Pix copiada!">Copiar só a chave</button>`;
+}
+ACTIONS.copiar = async el => {
+  const texto = el.dataset.texto;
+  try { await navigator.clipboard.writeText(texto); showToast(el.dataset.ok || 'Copiado!'); vibrate(15); }
+  catch (e) { prompt('Copie o texto abaixo:', texto); }
+};
+
+// ---------- Minha chave Pix (ajustes) ----------
+let EDITANDO_PIX = false;
+function meuPixHtml(meuPix) {
+  if (!EDITANDO_PIX && meuPix) {
+    return `
+      <p class="hint" style="margin-top:0">É assim que as pessoas do grupo vão te pagar.</p>
+      ${pixPainelHtml({ pix: meuPix, paraNome: meuPix.nome })}
+      <div class="btn-row">
+        <button class="secondary" type="button" data-action="editarPix">Alterar</button>
+        <button class="secondary danger" type="button" data-action="removerPix">Remover</button>
+      </div>`;
+  }
+  if (!EDITANDO_PIX) {
+    return `<p class="hint" style="margin-top:0">Cadastre sua chave para receber: quem te deve vê um QR Code pronto, já com o valor.</p>
+      <button class="primary" type="button" data-action="editarPix">Cadastrar chave Pix</button>`;
+  }
+  const p = meuPix || {};
+  const eu = Firebase.usuarioAtual();
+  return `
+    <form data-submit="salvarPix" novalidate autocomplete="off">
+      <label for="pix-tipo">Tipo da chave</label>
+      <select id="pix-tipo" data-change="onPixTipo">
+        ${Object.keys(TIPOS_CHAVE).map(t => `<option value="${t}" ${(p.tipo || 'telefone') === t ? 'selected' : ''}>${TIPOS_CHAVE[t]}</option>`).join('')}
+      </select>
+      <label for="pix-chave">Chave</label>
+      <input type="text" id="pix-chave" value="${h(p.chave || '')}" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <p class="hint" id="pix-chave-hint"></p>
+      <label for="pix-nome">Nome do titular (como está no banco)</label>
+      <input type="text" id="pix-nome" maxlength="25" value="${h(p.nome || (eu && eu.displayName) || '')}" autocapitalize="words">
+      <label for="pix-cidade">Cidade do titular</label>
+      <input type="text" id="pix-cidade" maxlength="15" value="${h(p.cidade || '')}" placeholder="Ex.: São Paulo" autocapitalize="words">
+      <p class="hint">Nome (até 25 letras) e cidade (até 15) entram no QR Code, como pede o padrão do Banco Central. A chave vale para todos os seus grupos.</p>
+      <div class="btn-row">
+        <button class="secondary" type="button" data-action="cancelarPix">Cancelar</button>
+        <button class="primary" type="submit">Salvar chave</button>
+      </div>
+    </form>`;
+}
+function ajustarCampoChave() {
+  const tipo = $('pix-tipo').value, input = $('pix-chave'), hintEl = $('pix-chave-hint');
+  const cfg = {
+    cpf: ['numeric', '000.000.000-00', '⚠️ A chave CPF fica visível (parcialmente mascarada) para as pessoas do grupo. Se preferir, use celular, email ou chave aleatória.'],
+    cnpj: ['numeric', '00.000.000/0000-00', ''],
+    telefone: ['tel', '(11) 99999-8888', ''],
+    email: ['email', 'seuemail@exemplo.com', ''],
+    aleatoria: ['text', '123e4567-e89b-12d3-a456-426614174000', 'Copie a chave aleatória no app do seu banco e cole aqui.']
+  }[tipo];
+  input.inputMode = cfg[0];
+  input.placeholder = cfg[1];
+  hintEl.textContent = cfg[2];
+  hintEl.className = 'hint' + (tipo === 'cpf' ? ' warn' : '');
+}
+ACTIONS.onPixTipo = () => ajustarCampoChave();
+ACTIONS.editarPix = () => { EDITANDO_PIX = true; renderCasa(); };
+ACTIONS.cancelarPix = () => { EDITANDO_PIX = false; renderCasa(); };
+ACTIONS.salvarPix = async form => {
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      const res = await api('salvarPix', {
+        tipo: $('pix-tipo').value, chave: $('pix-chave').value, nome: $('pix-nome').value, cidade: $('pix-cidade').value
+      });
+      EDITANDO_PIX = false;
+      showToast(res.grupos > 1 ? 'Chave Pix salva nos seus ' + res.grupos + ' grupos!' : 'Chave Pix salva!');
+      setTimeout(renderCasa, 300);
+    } catch (err) { onApiError(err); }
+  });
+};
+ACTIONS.removerPix = async () => {
+  if (!confirm('Remover sua chave Pix de todos os seus grupos?')) return;
+  try { await api('removerPix'); showToast('Chave Pix removida.'); setTimeout(renderCasa, 300); } catch (err) { onApiError(err); }
+};
+
+// ---------- Acertar as contas (painel) ----------
+let ACERTO_ABERTO = null;
+let ACERTO_MES = 'mes'; // 'tudo' ou 'mes' (o mês escolhido em STATE.mesAcerto)
+function listaAcertos(d) {
+  if (ACERTO_MES === 'tudo') return d.acertos || [];
+  const m = (d.meses || {})[STATE.mesAcerto];
+  return m ? m.acertos : [];
+}
+function mesesComSaldo(d) {
+  const meses = Object.keys(d.meses || {});
+  if (meses.indexOf(mesAtualKey()) === -1) meses.push(mesAtualKey());
+  return meses.sort().reverse();
+}
+function acertosHtml(d) {
+  const eu = Firebase.usuarioAtual().uid;
+  const lista = listaAcertos(d);
+  if (!lista.length) {
+    return ACERTO_MES === 'tudo' ? '<p class="empty">Tudo quitado neste conjunto 🎉</p>'
+      : '<p class="empty">' + labelMes(STATE.mesAcerto) + ' está quitado 🎉</p>';
+  }
+  return lista.map((a, i) => {
+    const chave = a.de + '>' + a.para;
+    const souEuQuemPaga = a.de === eu;
+    const texto = souEuQuemPaga ? `Você paga <strong>${h(a.paraNome)}</strong>`
+      : (a.para === eu ? `<strong>${h(a.deNome)}</strong> te paga` : `${h(a.deNome)} paga ${h(a.paraNome)}`);
+    return `
+      <div class="acerto-item">
+        <div class="list-row">
+          <div>${texto}</div>
+          <div class="acerto-valor">${fmtBRL(a.valor)}</div>
+        </div>
+        ${souEuQuemPaga ? (ACERTO_ABERTO === chave ? `
+          <div class="acerto-pix">
+            ${pixPainelHtml({ pix: a.pix, valor: a.valor, paraNome: a.paraNome })}
+            <button type="button" class="secondary" data-action="registrarAcerto" data-i="${i}">Já paguei — registrar</button>
+            <button type="button" class="link-btn" data-action="abrirAcerto" data-chave="">Fechar</button>
+          </div>` : `<button type="button" class="secondary" data-action="abrirAcerto" data-chave="${h(chave)}">Pagar com Pix</button>`) : ''}
+      </div>`;
+  }).join('');
+}
+ACTIONS.abrirAcerto = el => {
+  ACERTO_ABERTO = el.dataset.chave || null;
+  $('acertos-lista').innerHTML = acertosHtml(STATE.dashboard);
+};
+ACTIONS.escolherPeriodoAcerto = el => {
+  const v = el.value;
+  ACERTO_MES = v === 'tudo' ? 'tudo' : 'mes';
+  if (v !== 'tudo') STATE.mesAcerto = v;
+  ACERTO_ABERTO = null;
+  renderDashboard(STATE.dashboard);
+};
+function renderSaldoMes(d) {
+  const el = $('saldo-mes');
+  if (!el) return;
+  if (ACERTO_MES === 'tudo') { el.innerHTML = ''; return; }
+  const m = (d.meses || {})[STATE.mesAcerto];
+  const eu = Firebase.usuarioAtual().uid;
+  const meu = m ? (m.saldos.find(s => s._uid === eu) || { saldo: 0 }).saldo : 0;
+  const cls = meu > 0.005 ? 'status-good' : (meu < -0.005 ? 'status-critical' : 'status-neutral');
+  el.innerHTML = `<div class="list-row"><div>Seu saldo em ${labelMes(STATE.mesAcerto).toLowerCase()}
+      <div class="sub">${meu > 0.005 ? 'a receber' : (meu < -0.005 ? 'a pagar' : 'quitado')} · só lançamentos e parcelas deste mês</div></div>
+    <div class="acerto-valor ${cls}">${fmtBRL(Math.abs(meu))}</div></div>`;
+}
+ACTIONS.registrarAcerto = async el => {
+  const a = listaAcertos(STATE.dashboard)[Number(el.dataset.i)];
+  const mesRef = ACERTO_MES === 'tudo' ? mesAtualKey() : STATE.mesAcerto;
+  const quando = ACERTO_MES === 'tudo' ? '' : ' referente a ' + labelMes(mesRef).toLowerCase();
+  if (!a || !confirm('Confirmar que você pagou ' + fmtBRL(a.valor) + ' para ' + a.paraNome + quando + '? Isso abate o saldo total e o do mês.')) return;
+  await withBusy(el, async () => {
+    try {
+      await api('registrarAcerto', { para: a.para, valor: a.valor, grupo: STATE.grupoAtual, mesRef });
+      ACERTO_ABERTO = null;
+      vibrate(20);
+      showToast('Pagamento registrado! Saldos atualizados.');
+      loadDashboard();
+    } catch (err) { onApiError(err); }
+  });
 };
 
 // =================================================================== Casa (membros, convite, grupos)
@@ -1303,6 +1526,11 @@ async function renderCasa() {
             <button class="primary" type="submit">Salvar</button>
           </div>
         </form>` : ''}
+    </div>
+
+    <div class="card">
+      <h3>Minha chave Pix</h3>
+      <div id="meu-pix">${meuPixHtml(await api('meuPix'))}</div>
     </div>
 
     ${dono ? `
@@ -1357,6 +1585,7 @@ async function renderCasa() {
     </div>`}
   `;
   if (GRUPO_EDITANDO !== null) renderGrupoForm(grupos.find(g => g.id === GRUPO_EDITANDO) || null);
+  if (EDITANDO_PIX) ajustarCampoChave();
 }
 
 // =================================================================== Meus grupos e conta (vale para tudo)

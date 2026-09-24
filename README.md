@@ -112,4 +112,11 @@ ser conferidos sem Firebase, direto no Node, importando `public/js/calc.js`.
   Functions, o próprio app apaga tudo; as despesas pessoais de cada pessoa num grupo excluído são
   apagadas no próximo acesso dela.
 - **Despesas pessoais privadas**, ao lado das compartilhadas.
+- **Pix para receber:** cada pessoa cadastra a chave (CPF, CNPJ, celular, email ou aleatória), nome e
+  cidade do titular. O app gera o **BR Code estático** do Banco Central (QR Code e "Pix Copia e Cola",
+  com CRC16) já com o valor devido — em "Acertar as contas" e no pagamento de parcelas.
+  O gerador é conferido contra o exemplo oficial do Manual de Padrões para Iniciação do Pix (`public/js/pix.js`).
+- **Saldo do mês e acerto mensal:** além do saldo total, cada conjunto mostra o saldo de cada mês
+  (despesas do mês, parcelas que vencem no mês e pagamentos do mês). Cada Pix marcado como pago
+  abate o saldo total e o do mês de referência escolhido.
 - Sem limite de 5 pessoas.

@@ -81,7 +81,7 @@ export function montarDashboard(db, meUid, grupoId) {
   };
 
   db.despesas.filter(d => d.grupoId === grupoId).forEach(d => {
-    acumula(d.categoria, d.valor, d.data);
+    if (!d.acerto) acumula(d.categoria, d.valor, d.data); // acerto de contas não é gasto
     if (d.pagoPor in pagoAv) pagoAv[d.pagoPor] += d.valor;
     const dev = devidoPorPessoa(d, membrosG);
     Object.keys(dev).forEach(u => { if (u in devidoAv) devidoAv[u] += dev[u]; });
@@ -96,7 +96,7 @@ export function montarDashboard(db, meUid, grupoId) {
     const s = situacaoCompra(c, membrosG, db.pagamentos);
     Object.keys(s.impacto).forEach(u => { if (u in parc) parc[u] += s.impacto[u]; });
     if ((s.deve[meUid] || 0) > 1) {
-      comprasEmAberto.push({ id: c.id, descricao: c.descricao, saldoDevedor: reais(s.deve[meUid]) });
+      comprasEmAberto.push({ id: c.id, descricao: c.descricao, saldoDevedor: reais(s.deve[meUid]), comprador: c.comprador, compradorNome: nome(c.comprador) });
     }
   });
   const compraPorId = Object.fromEntries(comprasGrupo.map(c => [c.id, c]));
@@ -123,7 +123,21 @@ export function montarDashboard(db, meUid, grupoId) {
   Object.keys(catPorMesTotals).forEach(m => { catPorMes[m] = lista(catPorMesTotals[m]); });
 
   const pessoal = saldosPorPessoa.find(s => s._uid === meUid) || null;
+  const porMes = saldosPorMes(db, grupoId, membrosG);
+  const meses = {};
+  Object.keys(porMes).sort().forEach(mes => {
+    const lista = [...membrosG].map(u => ({ uid: u, saldo: porMes[mes][u] || 0 }));
+    meses[mes] = {
+      saldos: lista.map(x => ({ nome: nome(x.uid), _uid: x.uid, saldo: reais(x.saldo) }))
+        .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
+      acertos: acertosSugeridos(lista).map(a => ({ ...a, deNome: nome(a.de), paraNome: nome(a.para), valor: reais(a.valor) }))
+    };
+  });
+  const acertos = acertosSugeridos(saldosPorPessoa.map(x => ({ uid: x._uid, saldo: Math.round(x.saldoGeral * 100) })))
+    .map(a => ({ ...a, deNome: nome(a.de), paraNome: nome(a.para), valor: reais(a.valor) }));
   return {
+    meses,
+    acertos,
     grupoAtual: grupo ? grupo.nome : null,
     pessoal,
     saldosPorPessoa,
@@ -134,6 +148,71 @@ export function montarDashboard(db, meUid, grupoId) {
     comprasEmAberto,
     totalAvulsas: reais(Object.values(pagoAv).reduce((s, v) => s + v, 0))
   };
+}
+
+/**
+ * Saldo de cada pessoa, mês a mês (centavos). A soma de todos os meses é igual
+ * ao saldo geral:
+ *  - despesa: conta no mês da data (acerto: no mês de referência escolhido, `mesRef`);
+ *  - compra parcelada: cada parcela de cada participante conta no mês em que vence
+ *    (o comprador recebe a soma das parcelas dos outros naquele mês);
+ *  - pagamento de parcela: conta no mês em que foi feito (quem pagou +, comprador −).
+ * @returns {Object<string, Object<string, number>>} { 'aaaa-mm': { uid: centavos } }
+ */
+export function saldosPorMes(db, grupoId, membrosG) {
+  const out = {};
+  const soma = (mes, u, v) => {
+    if (!mes || !v) return;
+    out[mes] = out[mes] || {};
+    out[mes][u] = (out[mes][u] || 0) + v;
+  };
+  db.despesas.filter(d => d.grupoId === grupoId).forEach(d => {
+    const mes = d.acerto && d.mesRef ? d.mesRef : String(d.data || '').slice(0, 7);
+    if (membrosG.has(d.pagoPor)) soma(mes, d.pagoPor, d.valor);
+    const dev = devidoPorPessoa(d, membrosG);
+    Object.keys(dev).forEach(u => soma(mes, u, -dev[u]));
+  });
+  const compras = db.compras.filter(c => c.grupoId === grupoId);
+  compras.forEach(c => {
+    const parte = devidoPorPessoa(c, membrosG);
+    Object.keys(parte).forEach(u => {
+      if (u === c.comprador) return;
+      parcelasDaCompra({ ...c, valor: parte[u] }).forEach(p => {
+        soma(p.mes, u, -p.valor);
+        if (membrosG.has(c.comprador)) soma(p.mes, c.comprador, p.valor);
+      });
+    });
+  });
+  const compraPorId = Object.fromEntries(compras.map(c => [c.id, c]));
+  db.pagamentos.forEach(p => {
+    const c = compraPorId[p.compraId];
+    if (!c || p.pessoa === c.comprador) return;
+    const mes = String(p.data || '').slice(0, 7);
+    if (membrosG.has(p.pessoa)) soma(mes, p.pessoa, p.valor);
+    if (membrosG.has(c.comprador)) soma(mes, c.comprador, -p.valor);
+  });
+  return out;
+}
+
+/**
+ * Transferências para zerar os saldos com o menor número de Pix: quem mais deve
+ * paga para quem mais tem a receber, até todo mundo ficar quitado.
+ * @param {{uid:string, saldo:number}[]} saldos em centavos (+ a receber, − a pagar)
+ * @returns {{de:string, para:string, valor:number}[]} valores em centavos
+ */
+export function acertosSugeridos(saldos) {
+  const dev = saldos.filter(s => s.saldo < 0).map(s => ({ uid: s.uid, v: -s.saldo })).sort((a, b) => b.v - a.v);
+  const cred = saldos.filter(s => s.saldo > 0).map(s => ({ uid: s.uid, v: s.saldo })).sort((a, b) => b.v - a.v);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < dev.length && j < cred.length) {
+    const v = Math.min(dev[i].v, cred[j].v);
+    if (v > 0) out.push({ de: dev[i].uid, para: cred[j].uid, valor: v });
+    dev[i].v -= v; cred[j].v -= v;
+    if (dev[i].v === 0) i++;
+    if (cred[j].v === 0) j++;
+  }
+  return out;
 }
 
 const dataBR = iso => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '');
@@ -148,7 +227,7 @@ export function montarHistorico(db, grupoId, meUid, souDono) {
   const podeApagar = x => souDono || x.criadoPor === meUid;
 
   const despesas = db.despesas.filter(d => d.grupoId === grupoId).sort(porDataDesc).slice(0, 30).map(d => ({
-    row: d.id, id: d.id, data: dataBR(d.data), descricao: d.descricao, categoria: d.categoria, segmento: d.segmento,
+    row: d.id, id: d.id, acerto: !!d.acerto, data: dataBR(d.data), descricao: d.descricao, categoria: d.categoria, segmento: d.segmento,
     grupo: grupo && grupo.nome, valor: reais(d.valor), pagoPor: nome(d.pagoPor), metodo: d.metodo, podeApagar: podeApagar(d)
   }));
   const comprasGrupo = db.compras.filter(c => c.grupoId === grupoId);
