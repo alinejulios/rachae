@@ -26,6 +26,7 @@ service cloud.firestore {
     function casa(hid) { return /databases/$(database)/documents/households/$(hid); }
     function isMember(hid) { return signedIn() && exists(/databases/$(database)/documents/households/$(hid)/membros/$(uid())); }
     function isOwner(hid) { return signedIn() && get(casa(hid)).data.ownerUid == uid(); }
+    function excluindo(hid) { return get(casa(hid)).data.get('excluindo', false) == true; }
     function memberExists(hid, id) { return exists(/databases/$(database)/documents/households/$(hid)/membros/$(id)); }
 
     function str(v, min, max) { return v is string && v.size() >= min && v.size() <= max; }
@@ -71,12 +72,14 @@ service cloud.firestore {
       // Só o dono muda nome/listas; o dono nunca muda
       allow update: if isOwner(hid)
         && request.resource.data.ownerUid == resource.data.ownerUid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nome', 'categorias', 'segmentos', 'despesasPessoais'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nome', 'categorias', 'segmentos', 'despesasPessoais', 'excluindo'])
+        && request.resource.data.get('excluindo', false) is bool
         && str(request.resource.data.nome, 1, 40)
         && request.resource.data.categorias is list && request.resource.data.categorias.size() <= 30
         && request.resource.data.segmentos is list && request.resource.data.segmentos.size() <= 10
         && request.resource.data.get('despesasPessoais', false) is bool;
-      allow delete: if false;
+      // Excluir o grupo: só quem administra (o app apaga as subcoleções antes)
+      allow delete: if isOwner(hid);
 
       // -------------------------------------------------------------- membros
       match /membros/{memberId} {
@@ -91,6 +94,7 @@ service cloud.firestore {
             getAfter(casa(hid)).data.ownerUid == uid()
             || (
               str(request.resource.data.convite, 8, 40)
+              && exists(casa(hid)) && !excluindo(hid)
               && exists(/databases/$(database)/documents/convites/$(request.resource.data.convite))
               && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.householdId == hid
               && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.ativo == true
@@ -100,8 +104,12 @@ service cloud.firestore {
         allow update: if signedIn() && uid() == memberId
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nome'])
           && str(request.resource.data.nome, 1, 20);
-        // Sair da casa (a própria pessoa) ou ser removida pelo dono
-        allow delete: if signedIn() && (uid() == memberId || isOwner(hid)) && memberId != get(casa(hid)).data.ownerUid;
+        // Sair do grupo (a própria pessoa) ou ser removida pelo admin. O admin só
+        // sai apagando o grupo inteiro (quando o grupo está marcado como "excluindo").
+        allow delete: if signedIn() && (
+          ((uid() == memberId || isOwner(hid)) && memberId != get(casa(hid)).data.ownerUid)
+          || (isOwner(hid) && excluindo(hid))
+        );
       }
 
       // -------------------------------------------------------------- grupos
@@ -118,8 +126,8 @@ service cloud.firestore {
         allow update: if isMember(hid) && grupoOk()
           && request.resource.data.criadoPor == resource.data.criadoPor
           && (isOwner(hid) || resource.data.criadoPor == uid());
-        // O grupo com todos da casa nunca é excluído
-        allow delete: if !resource.data.todos
+        // O conjunto com todos do grupo só é apagado junto com o grupo inteiro
+        allow delete: if (!resource.data.todos || (isOwner(hid) && excluindo(hid)))
           && (isOwner(hid) || (isMember(hid) && resource.data.criadoPor == uid()));
       }
 
@@ -168,7 +176,8 @@ service cloud.firestore {
       // -------------------------------------------------------------- despesas pessoais (privadas)
       // Nem quem administra o grupo consegue ler as despesas pessoais de outra pessoa.
       match /pessoais/{donoId}/despesas/{id} {
-        allow read, delete: if isMember(hid) && uid() == donoId;
+        // Ler/apagar: só a dona; vale mesmo depois de sair do grupo, para ela poder limpar os próprios dados
+        allow read, delete: if signedIn() && uid() == donoId;
         allow create: if isMember(hid) && uid() == donoId
           && get(casa(hid)).data.get('despesasPessoais', false) == true
           && request.resource.data.keys().hasOnly(['data', 'descricao', 'categoria', 'valor', 'criadoEm'])
@@ -179,7 +188,8 @@ service cloud.firestore {
         allow update: if false;
       }
       match /pessoais/{donoId}/compras/{id} {
-        allow read, delete: if isMember(hid) && uid() == donoId;
+        // Ler/apagar: só a dona; vale mesmo depois de sair do grupo, para ela poder limpar os próprios dados
+        allow read, delete: if signedIn() && uid() == donoId;
         allow create: if isMember(hid) && uid() == donoId
           && get(casa(hid)).data.get('despesasPessoais', false) == true
           && request.resource.data.keys().hasOnly(['data', 'descricao', 'categoria', 'valor', 'nParcelas', 'criadoEm'])

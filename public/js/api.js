@@ -16,7 +16,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, writeBatch, serverTimestamp
+  doc, getDoc, getDocs, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, writeBatch, serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from '../firebase-config.js';
 import { montarDashboard, montarHistorico, membrosDoGrupo, montarDashboardPessoal, montarHistoricoPessoal } from './calc.js';
@@ -152,10 +152,11 @@ export const carregarCasa = (hidDesejada) => tenta(async () => {
       casaSnap = await getDoc(doc(fs, 'households', hid));
       eu = await getDoc(doc(fs, 'households', hid, 'membros', u.uid));
     } catch (e) {
-      if (e.code === 'permission-denied') continue; // foi removida dessa casa
+      // Sem acesso: o grupo foi excluído ou a pessoa foi removida. Limpa o que é dela e segue.
+      if (e.code === 'permission-denied') { await esquecerGrupo(hid).catch(() => {}); continue; }
       throw e;
     }
-    if (!casaSnap.exists() || !eu.exists()) continue;
+    if (!casaSnap.exists() || !eu.exists()) { await esquecerGrupo(hid).catch(() => {}); continue; }
     CASA = { id: hid, ...casaSnap.data() };
     await escutarDados(hid);
     if (perfil.atual !== hid || !perfil.casas.includes(hid)) {
@@ -267,15 +268,79 @@ export const entrarComConvite = (codigo, meuNome) => tenta(async () => {
 });
 
 /** Sair de uma casa (quem não é dono). Os lançamentos continuam no histórico dela. */
+async function apagarEmLotes(refs) {
+  for (let i = 0; i < refs.length; i += 450) {
+    const b = writeBatch(fs);
+    refs.slice(i, i + 450).forEach(r => b.delete(r));
+    await b.commit();
+  }
+}
+/** Apaga as despesas pessoais da pessoa num grupo (só ela tem acesso a elas). */
+async function apagarMeusPessoais(hid) {
+  const uid = usuarioAtual().uid;
+  const refs = [];
+  for (const sub of ['despesas', 'compras']) {
+    const snap = await getDocs(collection(fs, 'households', hid, 'pessoais', uid, sub));
+    snap.forEach(d => refs.push(d.ref));
+  }
+  await apagarEmLotes(refs);
+}
+/** Grupo que sumiu (excluído, ou a pessoa foi removida): apaga os pessoais dela ali e tira da lista. */
+async function esquecerGrupo(hid) {
+  const u = usuarioAtual();
+  await apagarMeusPessoais(hid).catch(() => {});
+  const perfil = await lerPerfil(u.uid);
+  if (!perfil.casas.includes(hid) && perfil.atual !== hid) return;
+  const resto = perfil.casas.filter(x => x !== hid);
+  await salvarPerfil(u.uid, resto, perfil.atual === hid ? (resto[0] || '') : perfil.atual);
+}
+
+/** Convidado sai do grupo: apaga as próprias despesas pessoais dele ali e o registro de membro. */
 export const sairDaCasa = () => tenta(async () => {
   const u = usuarioAtual();
-  if (souDono()) throw new ApiError('Quem criou o grupo não pode sair dele.');
+  if (souDono()) throw new ApiError('Quem administra o grupo não pode sair dele. Você pode excluir o grupo.');
   const hid = CASA.id;
+  pararEscuta();
+  await apagarMeusPessoais(hid);
   await deleteDoc(doc(fs, 'households', hid, 'membros', u.uid));
   const perfil = await lerPerfil(u.uid);
   const resto = perfil.casas.filter(x => x !== hid);
   await salvarPerfil(u.uid, resto, resto[0] || '');
+  CASA = null; DB = null;
+});
+
+/**
+ * Admin exclui o grupo inteiro. Sem Cloud Functions, o app apaga tudo, em ordem:
+ * marca o grupo como "excluindo" (as regras passam a aceitar a limpeza), apaga
+ * lançamentos, conjuntos, convite, as pessoas e por último o próprio grupo.
+ * As despesas pessoais dos OUTROS membros ninguém além deles consegue ler; elas
+ * são apagadas automaticamente no próximo acesso de cada um (esquecerGrupo).
+ */
+export const excluirGrupoInteiro = () => tenta(async () => {
+  if (!souDono()) throw new ApiError('Só quem administra pode excluir o grupo.');
+  const hid = CASA.id;
+  const u = usuarioAtual().uid;
+  const copia = DB;
   pararEscuta();
+  await updateDoc(doc(fs, 'households', hid), { excluindo: true });
+  const ref = (col, id) => doc(fs, 'households', hid, col, id);
+  await apagarEmLotes([
+    ...copia.pagamentos.map(x => ref('pagamentos', x.id)),
+    ...copia.compras.map(x => ref('compras', x.id)),
+    ...copia.despesas.map(x => ref('despesas', x.id)),
+    ...copia.grupos.map(x => ref('grupos', x.id))
+  ]);
+  const convite = conviteAtual();
+  if (convite) await deleteDoc(doc(fs, 'convites', convite)).catch(() => {});
+  try { localStorage.removeItem(CONVITE_KEY(hid)); } catch (e) {}
+  await apagarMeusPessoais(hid);
+  // Pessoas: os outros primeiro, eu por último (as regras de exclusão dependem do grupo existir)
+  await apagarEmLotes(copia.membros.filter(m => m.uid !== u).map(m => ref('membros', m.uid)));
+  await deleteDoc(ref('membros', u));
+  await deleteDoc(doc(fs, 'households', hid));
+  const perfil = await lerPerfil(u);
+  const resto = perfil.casas.filter(x => x !== hid);
+  await salvarPerfil(u, resto, resto[0] || '');
   CASA = null; DB = null;
 });
 
@@ -489,11 +554,7 @@ const ACOES = {
       ...despesas.map(d => doc(fs, 'households', CASA.id, 'despesas', d.id)),
       doc(fs, 'households', CASA.id, 'grupos', id)
     ];
-    for (let i = 0; i < refs.length; i += 450) {
-      const b = writeBatch(fs);
-      refs.slice(i, i + 450).forEach(r => b.delete(r));
-      await b.commit();
-    }
+    await apagarEmLotes(refs);
     return { ok: true, apagados: refs.length - 1 };
   },
   contarLancamentosGrupo({ id }) {

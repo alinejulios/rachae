@@ -108,5 +108,8 @@ ser conferidos sem Firebase, direto no Node, importando `public/js/calc.js`.
 - **Apagar lançamentos:** cada pessoa apaga o que lançou (quem administra o grupo apaga qualquer um).
 - **Conjuntos de despesas** criados, editados e excluídos pelo próprio app.
 - **Vários grupos por pessoa:** crie ou entre em outros grupos e troque entre eles.
+- **Sair do grupo** (convidados) e **excluir o grupo** (admin, confirmando com o nome). Sem Cloud
+  Functions, o próprio app apaga tudo; as despesas pessoais de cada pessoa num grupo excluído são
+  apagadas no próximo acesso dela.
 - **Despesas pessoais privadas**, ao lado das compartilhadas.
 - Sem limite de 5 pessoas.

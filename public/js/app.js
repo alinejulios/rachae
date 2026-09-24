@@ -1345,9 +1345,16 @@ async function renderCasa() {
     ${!dono ? `
     <div class="card">
       <h3>Sair do grupo</h3>
-      <p class="hint" style="margin-top:0">Você deixa de ver ${h(casa.nome)}. Seus lançamentos continuam no histórico dele.</p>
+      <p class="hint" style="margin-top:0">Você deixa de ver ${h(casa.nome)}. Os lançamentos compartilhados que você fez
+        continuam no histórico do grupo; suas despesas pessoais daqui são apagadas.</p>
       <button class="secondary danger" type="button" data-action="sairDaCasa">Sair de ${h(casa.nome)}</button>
-    </div>` : ''}
+    </div>` : `
+    <div class="card zona-perigo">
+      <h3>Excluir grupo</h3>
+      <p class="hint" style="margin-top:0">Apaga ${h(casa.nome)} para todo mundo: lançamentos, conjuntos, convites e pessoas.
+        As despesas pessoais de cada um também somem. <strong>Não dá para desfazer.</strong></p>
+      <button class="secondary danger" type="button" data-action="excluirGrupoInteiro">Excluir ${h(casa.nome)}</button>
+    </div>`}
   `;
   if (GRUPO_EDITANDO !== null) renderGrupoForm(grupos.find(g => g.id === GRUPO_EDITANDO) || null);
 }
@@ -1468,9 +1475,27 @@ ACTIONS.trocarCasa = async el => {
     await abrirOutraCasa(() => Firebase.carregarCasa(el.dataset.id), 'Grupo aberto.');
   } catch (err) { onApiError(err); }
 };
+ACTIONS.excluirGrupoInteiro = async el => {
+  const nome = Firebase.casaAtual().nome;
+  const digitado = prompt('Isso apaga "' + nome + '" para todo mundo e não pode ser desfeito.\n\nPara confirmar, digite o nome do grupo:');
+  if (digitado === null) return;
+  if (digitado.trim().toLowerCase() !== nome.trim().toLowerCase()) { showToast('O nome não confere. Nada foi apagado.', true); return; }
+  el.disabled = true;
+  el.textContent = 'Excluindo...';
+  try {
+    await Firebase.excluirGrupoInteiro();
+    showToast('Grupo "' + nome + '" excluído.');
+    store.remove(chaveGrupo());
+    STATE.casa = null;
+    await abrirCasa(Firebase.usuarioAtual());
+  } catch (err) {
+    onApiError(err);
+    if (el.isConnected) { el.disabled = false; el.textContent = 'Excluir ' + nome; }
+  }
+};
 ACTIONS.sairDaCasa = async () => {
   const nome = STATE.casa ? STATE.casa.nome : 'este grupo';
-  if (!confirm('Sair de "' + nome + '"? Você deixa de ver os dados dele; seus lançamentos continuam no histórico do grupo.')) return;
+  if (!confirm('Sair de "' + nome + '"? Você deixa de ver o grupo e suas despesas pessoais dele são apagadas.')) return;
   try {
     await Firebase.sairDaCasa();
     showToast('Você saiu do grupo.');
