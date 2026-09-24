@@ -82,23 +82,6 @@ O código de convite fica guardado **só no aparelho de quem criou o grupo** (o 
 deixa listar convites, de propósito). Se trocar de aparelho, é só tocar em **Gerar código
 de convite** de novo.
 
-## Email de redefinição de senha (SMTP próprio)
-O Firebase manda os emails de "esqueci a senha" de `noreply@<projeto>.firebaseapp.com`, que muitas vezes
-não chega ou cai no spam. Para enviar por uma conta sua (hoje: o Gmail de desenvolvimento), configure o
-**SMTP no próprio Firebase** — a senha fica guardada no Firebase, nunca no código do site:
-
-1. Na conta Google que vai enviar, ligue a **Verificação em duas etapas** e crie uma **senha de app**
-   em [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) (nome: "Rachaê Firebase").
-2. Console do Firebase → **Authentication → Modelos** → **Configurações de SMTP** (no fim da lista da esquerda) → ativar:
-   - Endereço do remetente: o próprio Gmail (o Gmail troca o remetente se for outro)
-   - Host do servidor SMTP: `smtp.gmail.com` · Porta: `587` · Modo de segurança: **STARTTLS**
-   - Nome de usuário: o Gmail completo · Senha: a **senha de app** de 16 letras (não a senha normal)
-3. Em **Modelos → Redefinição de senha**, troque o idioma para **Português (Brasil)** e, se quiser, o nome do
-   remetente para "Rachaê".
-
-Limite do Gmail: ~500 emails por dia — folgado para o app. Quando houver um domínio próprio, troque
-para um serviço de envio (Brevo, SendGrid, Resend…) nos mesmos campos e revogue a senha de app.
-
 ## Proteção extra (recomendado)
 - **Restringir a chave da API ao seu site:** no [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
   (mesmo projeto) → chave "Browser key" → **Restrições de aplicativo: Referenciadores HTTP** →
