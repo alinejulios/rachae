@@ -4,6 +4,10 @@ rules_version = '2';
 // ------------------------------------------
 // No plano Spark não há Cloud Functions: TODA a proteção dos dados está aqui.
 //
+// Na tela: "grupo" = households (quem divide as contas, com convite) e
+// "conjunto de despesas" = households/{hid}/grupos. Os nomes das coleções são
+// os da primeira versão, para não precisar migrar dados.
+//
 // Modelo:
 //   users/{uid}                          → { casas[], casaAtual }   (só o próprio usuário)
 //   convites/{codigo}                    → { householdId, ativo }   (quem sabe o código consegue ler)
@@ -13,6 +17,7 @@ rules_version = '2';
 //   households/{hid}/despesas/{id}
 //   households/{hid}/compras/{id}
 //   households/{hid}/pagamentos/{id}
+//   households/{hid}/pessoais/{uid}/despesas/{id} → despesas pessoais: SÓ a própria pessoa lê e grava
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -58,17 +63,19 @@ service cloud.firestore {
       allow read: if isMember(hid);
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid()
-        && request.resource.data.keys().hasOnly(['nome', 'ownerUid', 'categorias', 'segmentos', 'criadoEm'])
+        && request.resource.data.keys().hasOnly(['nome', 'ownerUid', 'categorias', 'segmentos', 'despesasPessoais', 'criadoEm'])
         && str(request.resource.data.nome, 1, 40)
         && request.resource.data.categorias is list && request.resource.data.categorias.size() <= 30
-        && request.resource.data.segmentos is list && request.resource.data.segmentos.size() <= 10;
+        && request.resource.data.segmentos is list && request.resource.data.segmentos.size() <= 10
+        && request.resource.data.get('despesasPessoais', false) is bool;
       // Só o dono muda nome/listas; o dono nunca muda
       allow update: if isOwner(hid)
         && request.resource.data.ownerUid == resource.data.ownerUid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nome', 'categorias', 'segmentos'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nome', 'categorias', 'segmentos', 'despesasPessoais'])
         && str(request.resource.data.nome, 1, 40)
         && request.resource.data.categorias is list && request.resource.data.categorias.size() <= 30
-        && request.resource.data.segmentos is list && request.resource.data.segmentos.size() <= 10;
+        && request.resource.data.segmentos is list && request.resource.data.segmentos.size() <= 10
+        && request.resource.data.get('despesasPessoais', false) is bool;
       allow delete: if false;
 
       // -------------------------------------------------------------- membros
@@ -156,6 +163,20 @@ service cloud.firestore {
           && divisaoOk(request.resource.data.divisao);
         allow update: if false;
         allow delete: if isOwner(hid) || (isMember(hid) && resource.data.criadoPor == uid());
+      }
+
+      // -------------------------------------------------------------- despesas pessoais (privadas)
+      // Nem quem administra o grupo consegue ler as despesas pessoais de outra pessoa.
+      match /pessoais/{donoId}/despesas/{id} {
+        allow read, delete: if isMember(hid) && uid() == donoId;
+        allow create: if isMember(hid) && uid() == donoId
+          && get(casa(hid)).data.get('despesasPessoais', false) == true
+          && request.resource.data.keys().hasOnly(['data', 'descricao', 'categoria', 'valor', 'criadoEm'])
+          && dataISO(request.resource.data.data)
+          && str(request.resource.data.descricao, 1, 80)
+          && str(request.resource.data.categoria, 1, 40)
+          && centavos(request.resource.data.valor);
+        allow update: if false;
       }
 
       // -------------------------------------------------------------- pagamentos de parcela

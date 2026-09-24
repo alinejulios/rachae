@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://www.gstatic.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebaseinstallations.googleapis.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Rachaê</title>
-<meta name="description" content="Divisão de contas de casa">
+<meta name="description" content="Divisão de contas em grupo">
 
 <!-- PWA / tela inicial -->
 <link rel="manifest" href="manifest.webmanifest">
@@ -58,8 +58,8 @@
 
     <!-- Criar conta -->
     <form id="form-conta" class="login-step hidden" novalidate>
-      <p>Crie sua conta. Depois você entra na casa com o código de convite.</p>
-      <label for="conta-nome" class="field-label">Seu nome (como vai aparecer para a casa)</label>
+      <p>Crie sua conta. Depois você entra no grupo com o código de convite.</p>
+      <label for="conta-nome" class="field-label">Seu nome (como vai aparecer para o grupo)</label>
       <input type="text" id="conta-nome" maxlength="20" placeholder="Ex.: Aline"
              autocomplete="given-name" autocapitalize="words" enterkeyhint="next">
       <label for="conta-email" class="field-label">Email</label>
@@ -90,22 +90,26 @@
       </div>
     </form>
 
-    <!-- Logado, mas ainda sem casa -->
+    <!-- Logado, mas ainda sem grupo -->
     <div id="step-sem-casa" class="login-step hidden">
-      <p>Olá, <strong id="sem-casa-nome"></strong>! Falta entrar numa casa.</p>
+      <p>Olá, <strong id="sem-casa-nome"></strong>! Falta entrar num grupo.</p>
       <form id="form-convite" novalidate>
         <label for="convite-codigo" class="field-label">Código de convite</label>
         <input type="text" id="convite-codigo" placeholder="ABCD234567" maxlength="20"
                autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="go">
-        <button class="primary" type="submit">Entrar na casa</button>
+        <button class="primary" type="submit">Entrar no grupo</button>
         <p class="hint" id="convite-hint" role="status"></p>
       </form>
       <details class="criar-casa">
-        <summary>Sou eu quem vai criar a casa</summary>
+        <summary>Quero criar um grupo novo</summary>
         <form id="form-nova-casa" novalidate>
-          <label for="casa-nome" class="field-label">Nome da casa</label>
-          <input type="text" id="casa-nome" maxlength="40" placeholder="Ex.: Apê da Rua 7" autocapitalize="sentences" enterkeyhint="go">
-          <button class="primary" type="submit">Criar casa</button>
+          <label for="casa-nome" class="field-label">Nome do grupo</label>
+          <input type="text" id="casa-nome" maxlength="40" placeholder="Ex.: Apê da Rua 7, Viagem Chile" autocapitalize="sentences" enterkeyhint="go">
+          <label class="participa-item" style="margin-top:12px">
+            <input type="checkbox" id="casa-pessoais" checked> Incluir despesas pessoais
+          </label>
+          <p class="hint">Cada pessoa ganha um conjunto "Pessoal" só dela: ninguém mais vê e não entra na divisão.</p>
+          <button class="primary" type="submit">Criar grupo</button>
           <p class="hint">Você vira administrador(a) e recebe um código para convidar os outros.</p>
           <p class="hint" id="nova-casa-hint" role="status"></p>
         </form>
@@ -135,9 +139,9 @@
         <span>Olá, <span id="who-name"></span><span class="who-sub" id="who-casa">Divisão de contas</span></span>
       </div>
       <div class="topbar-right">
-        <label for="grupo-switcher" class="visually-hidden">Grupo</label>
+        <label for="grupo-switcher" class="visually-hidden">Conjunto de despesas</label>
         <select id="grupo-switcher" data-change="onGrupoSwitch"></select>
-        <button class="icon-btn" type="button" data-tab="casa" aria-label="Casa e configurações">
+        <button class="icon-btn" type="button" data-tab="casa" aria-label="Grupo e configurações">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/></svg>
         </button>
       </div>

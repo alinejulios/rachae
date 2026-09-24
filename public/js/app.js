@@ -1,5 +1,5 @@
 import * as Firebase from './api.js';
-import { api } from './api.js';
+import { api, PESSOAL } from './api.js';
 
 // =================================================================== Estado
 const STATE = {
@@ -65,7 +65,7 @@ function showToast(msg, isError) {
 function vibrate(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} }
 function onApiError(err) {
   if (err && err.code === 'AUTH') { showToast(err.message, true); goToLogin(); return; }
-  if (err && err.code === 'permission-denied') { showToast('Sem permissão. Talvez você tenha sido removida(o) da casa.', true); return; }
+  if (err && err.code === 'permission-denied') { showToast('Sem permissão. Talvez você tenha sido removida(o) do grupo.', true); return; }
   showToast((err && err.message) || 'Erro inesperado.', true);
 }
 async function withBusy(btn, fn) {
@@ -262,14 +262,14 @@ ACTIONS.submit_form_convite = async form => {
   const codigo = $('convite-codigo').value.trim();
   if (!codigo) { hint('convite-hint', 'Digite o código de convite.', 'error'); return; }
   const user = Firebase.usuarioAtual();
-  hint('convite-hint', 'Entrando na casa...');
+  hint('convite-hint', 'Entrando no grupo...');
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
       await Firebase.entrarComConvite(codigo, user.displayName || user.email.split('@')[0]);
       CONVITE_URL = '';
       hint('convite-hint', '');
       await abrirCasa(user);
-      showToast('Bem-vinda(o) à casa!');
+      showToast('Bem-vinda(o) ao grupo!');
     } catch (err) { hint('convite-hint', err.message, 'error'); vibrate(80); }
   });
 };
@@ -278,10 +278,10 @@ ACTIONS.submit_form_nova_casa = async form => {
   const user = Firebase.usuarioAtual();
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      await Firebase.criarCasa($('casa-nome').value, user.displayName || user.email.split('@')[0]);
+      await Firebase.criarCasa($('casa-nome').value, user.displayName || user.email.split('@')[0], $('casa-pessoais').checked);
       await abrirCasa(user);
       switchTab('casa');
-      showToast('Casa criada! Agora convide os moradores.');
+      showToast('Grupo criado! Agora convide as pessoas.');
     } catch (err) { hint('nova-casa-hint', err.message, 'error'); }
   });
 };
@@ -311,7 +311,7 @@ async function atualizarAoVivo() {
     STATE.config = await api('config');
     applyGrupos(await api('grupos'));
     const saiuDaCasa = STATE.config.names.indexOf(STATE.pessoa) === -1;
-    if (saiuDaCasa) { showToast('Você não faz mais parte desta casa.', true); goToLogin(); return; }
+    if (saiuDaCasa) { showToast('Você não faz mais parte deste grupo.', true); goToLogin(); return; }
     if (['dashboard', 'historico', 'casa'].includes(STATE.currentTab)) refreshCurrentTabData();
   } catch (err) { /* sem conexão: tenta na próxima mudança */ }
 }
@@ -321,24 +321,29 @@ async function loadGrupos() {
   try {
     applyGrupos(await api('grupos'));
   } catch (err) {
-    showToast('Erro ao carregar grupos: ' + err.message, true);
+    showToast('Erro ao carregar conjuntos: ' + err.message, true);
     STATE.grupos = [];
   }
   switchTab(STATE.currentTab === 'casa' ? 'casa' : 'dashboard');
 }
+function pessoaisLigadas() { return !!(STATE.config && STATE.config.despesasPessoais); }
+function noPessoal() { return STATE.grupoAtual === PESSOAL && pessoaisLigadas(); }
 function applyGrupos(grupos) {
   STATE.grupos = grupos || [];
   const saved = store.get(chaveGrupo());
   const meusGrupos = STATE.grupos.filter(g => g.membros.indexOf(STATE.pessoa) >= 0);
-  STATE.grupoAtual = (saved && STATE.grupos.some(g => g.nome === saved)) ? saved
+  const valido = saved && (STATE.grupos.some(g => g.nome === saved) || (saved === PESSOAL && pessoaisLigadas()));
+  STATE.grupoAtual = valido ? saved
     : (meusGrupos[0] ? meusGrupos[0].nome : (STATE.grupos[0] ? STATE.grupos[0].nome : null));
   renderGrupoSwitcher();
 }
 function renderGrupoSwitcher() {
   const sel = $('grupo-switcher');
-  if (!STATE.grupos.length) { sel.innerHTML = '<option value="">Sem grupos</option>'; return; }
-  sel.innerHTML = STATE.grupos.map(g =>
-    `<option value="${h(g.nome)}" ${g.nome === STATE.grupoAtual ? 'selected' : ''}>${h(g.nome)}</option>`).join('');
+  const opcoes = STATE.grupos.map(g => ({ valor: g.nome, rotulo: g.nome }));
+  if (pessoaisLigadas()) opcoes.push({ valor: PESSOAL, rotulo: 'Pessoal (só você)' });
+  if (!opcoes.length) { sel.innerHTML = '<option value="">Sem conjuntos</option>'; return; }
+  sel.innerHTML = opcoes.map(o =>
+    `<option value="${h(o.valor)}" ${o.valor === STATE.grupoAtual ? 'selected' : ''}>${h(o.rotulo)}</option>`).join('');
 }
 ACTIONS.onGrupoSwitch = sel => {
   STATE.grupoAtual = sel.value;
@@ -472,6 +477,7 @@ function statusIconSvg(kind) {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5 11 15l4.5-6"/></svg>';
 }
 function renderDashboard(d) {
+  if (d.pessoalMode) { renderDashboardPessoal(d); return; }
   const el = $('tab-dashboard');
   const p = d.pessoal || { saldoGeral: 0, saldoAv: 0, saldoParc: 0 };
   const statusKind = p.saldoGeral > 0.5 ? 'good' : (p.saldoGeral < -0.5 ? 'critical' : 'neutral');
@@ -499,7 +505,7 @@ function renderDashboard(d) {
       <div class="label">Seu saldo geral${h(grupoLabel)}</div>
       <div class="value ${statusClass}">${fmtBRL(Math.abs(p.saldoGeral))}</div>
       <div class="status ${statusClass}">${statusIconSvg(statusKind)}${statusLabel}</div>
-      ${naoEhMembro ? `<p class="hint">Você não participa do grupo "${h(d.grupoAtual)}".</p>` : ''}
+      ${naoEhMembro ? `<p class="hint">Você não participa do conjunto "${h(d.grupoAtual)}".</p>` : ''}
       <div class="stat-row">
         <div class="stat-tile"><div class="l">Saldo avulsas</div><div class="v">${fmtBRL(p.saldoAv)}</div></div>
         <div class="stat-tile"><div class="l">Saldo parceladas</div><div class="v">${fmtBRL(p.saldoParc)}</div></div>
@@ -548,6 +554,60 @@ function renderDashboard(d) {
   renderChartMensal();
   renderChartCategoriaMes();
   renderChartReembolsos(d.reembolsosPorPessoa || []);
+}
+function seletoresGraficos(d) {
+  const anos = Array.from(new Set((d.evolucaoMensal || []).map(m => Number(m.mes.slice(0, 4)))));
+  if (anos.indexOf(anoAtual()) === -1) anos.push(anoAtual());
+  anos.sort((a, b) => b - a);
+  if (!STATE.anoSelecionado || anos.indexOf(STATE.anoSelecionado) === -1) STATE.anoSelecionado = anoAtual();
+  const meses = Object.keys(d.catPorMes || {});
+  if (meses.indexOf(mesAtualKey()) === -1) meses.push(mesAtualKey());
+  meses.sort().reverse();
+  if (!STATE.mesSelecionado || (STATE.mesSelecionado !== 'todos' && meses.indexOf(STATE.mesSelecionado) === -1)) {
+    STATE.mesSelecionado = mesAtualKey();
+  }
+  return { anos, meses };
+}
+// Conjunto pessoal: só os gastos da própria pessoa, sem saldos nem divisão
+function renderDashboardPessoal(d) {
+  const { anos, meses } = seletoresGraficos(d);
+  $('tab-dashboard').innerHTML = `
+    <div id="install-card"></div>
+    <div class="card hero">
+      <div class="label">Seus gastos pessoais em ${MESES_LONGOS[new Date().getMonth()].toLowerCase()}</div>
+      <div class="value">${fmtBRL(d.totalMes)}</div>
+      <div class="status status-neutral">🔒 Só você vê</div>
+      <div class="stat-row">
+        <div class="stat-tile"><div class="l">Lançamentos no mês</div><div class="v">${d.qtdMes}</div></div>
+        <div class="stat-tile"><div class="l">Total registrado</div><div class="v">${fmtBRL(d.totalGeral)}</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="chart-head">
+        <h3>Gastos por mês</h3>
+        <select id="ano-select" class="chart-select" data-change="onAnoChange" aria-label="Ano">
+          ${anos.map(a => `<option value="${a}" ${a === STATE.anoSelecionado ? 'selected' : ''}>${a}</option>`).join('')}
+        </select>
+      </div>
+      <div class="chart-box" style="height:220px"><canvas id="chart-mensal"></canvas></div>
+      <p class="empty hidden" id="chart-mensal-empty">Sem gastos pessoais neste ano ainda.</p>
+      <p class="hint" id="mensal-comparacao-hint"></p>
+    </div>
+    <div class="card">
+      <div class="chart-head">
+        <h3>Categorias</h3>
+        <select id="mes-select" class="chart-select" data-change="onMesChange" aria-label="Mês">
+          <option value="todos" ${STATE.mesSelecionado === 'todos' ? 'selected' : ''}>Todos os meses</option>
+          ${meses.map(m => `<option value="${m}" ${m === STATE.mesSelecionado ? 'selected' : ''}>${labelMes(m)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="chart-box" style="height:300px"><canvas id="chart-categoria-mes"></canvas></div>
+      <p class="empty hidden" id="chart-categoria-mes-empty">Sem gastos neste período ainda.</p>
+    </div>
+  `;
+  renderInstallCard();
+  renderChartMensal();
+  renderChartCategoriaMes();
 }
 ACTIONS.onAnoChange = el => { STATE.anoSelecionado = Number(el.value); renderChartMensal(); };
 ACTIONS.onMesChange = el => { STATE.mesSelecionado = el.value; renderChartCategoriaMes(); };
@@ -720,8 +780,8 @@ function moneyInput(id, extraAttrs = '') {
 function renderDespesaForm() {
   const el = $('tab-despesa');
   const cfg = STATE.config;
-  if (!STATE.grupos.length) {
-    el.innerHTML = '<div class="card"><h3>Nova despesa</h3><p class="empty">Nenhum grupo ainda. Peça para criar um na aba Grupos da planilha.</p></div>';
+  if (!STATE.grupos.length && !pessoaisLigadas()) {
+    el.innerHTML = '<div class="card"><h3>Nova despesa</h3><p class="empty">Nenhum conjunto de despesas ainda. Crie um na tela do grupo (ícone de pessoa, no topo).</p></div>';
     return;
   }
   TAG_DRAFTS['desp-tags-editor'] = [];
@@ -738,8 +798,9 @@ function renderDespesaForm() {
       <select id="desp-categoria">${optionsHtml(cfg.categorias)}</select>
       <label for="desp-segmento">Segmento</label>
       <select id="desp-segmento">${optionsHtml(cfg.segmentos)}</select>
-      <label for="desp-grupo">Grupo</label>
-      <select id="desp-grupo" data-change="renderPessoasFields" data-prefix="desp">${optionsHtml(STATE.grupos.map(g => g.nome), grupoInicial())}</select>
+      <label for="desp-grupo">Conjunto de despesas</label>
+      <select id="desp-grupo" data-change="renderPessoasFields" data-prefix="desp">${optionsHtml(STATE.grupos.map(g => g.nome), noPessoal() ? null : grupoInicial())}${
+        pessoaisLigadas() ? `<option value="${PESSOAL}" ${noPessoal() ? 'selected' : ''}>Pessoal (só você)</option>` : ''}</select>
       <div id="desp-pessoas-fields"></div>
       <span class="field-label">Tags</span>
       <div id="desp-tags-editor"></div>
@@ -754,7 +815,7 @@ function renderCompraForm() {
   const el = $('tab-compra');
   const cfg = STATE.config;
   if (!STATE.grupos.length) {
-    el.innerHTML = '<div class="card"><h3>Nova compra parcelada</h3><p class="empty">Nenhum grupo ainda. Peça para criar um na aba Grupos da planilha.</p></div>';
+    el.innerHTML = '<div class="card"><h3>Nova compra parcelada</h3><p class="empty">Nenhum conjunto de despesas ainda. Crie um na tela do grupo (ícone de pessoa, no topo).</p></div>';
     return;
   }
   TAG_DRAFTS['compra-tags-editor'] = [];
@@ -772,7 +833,7 @@ function renderCompraForm() {
       <input type="date" id="compra-data" value="${todayStr()}">
       <label for="compra-categoria">Categoria</label>
       <select id="compra-categoria">${optionsHtml(cfg.categorias)}</select>
-      <label for="compra-grupo">Grupo</label>
+      <label for="compra-grupo">Conjunto de despesas</label>
       <select id="compra-grupo" data-change="renderPessoasFields" data-prefix="compra">${optionsHtml(STATE.grupos.map(g => g.nome), grupoInicial())}</select>
       <div id="compra-pessoas-fields"></div>
       <span class="field-label">Tags</span>
@@ -787,6 +848,14 @@ function renderCompraForm() {
 // Campos que dependem do grupo: quem pagou, quem participa, método de divisão
 function renderPessoasFields(prefixOrEl) {
   const prefix = typeof prefixOrEl === 'string' ? prefixOrEl : prefixOrEl.dataset.prefix;
+  const pessoal = $(prefix + '-grupo').value === PESSOAL;
+  const seg = $(prefix + '-segmento');
+  if (seg) seg.closest('form').querySelector('label[for="' + prefix + '-segmento"]').classList.toggle('hidden', pessoal);
+  if (seg) seg.classList.toggle('hidden', pessoal);
+  if (pessoal) {
+    $(prefix + '-pessoas-fields').innerHTML = '<p class="hint">🔒 Despesa pessoal: só você vê e ela não entra na divisão do grupo.</p>';
+    return;
+  }
   const membros = grupoMembros($(prefix + '-grupo').value);
   const pagadorLabel = prefix === 'desp' ? 'Pago por' : 'Comprador (quem colocou no cartão)';
   const pagadorId = prefix === 'desp' ? 'desp-pagopor' : 'compra-comprador';
@@ -917,6 +986,7 @@ function validarLancamento(prefix, valorTotal, participantes) {
 }
 
 ACTIONS.submitDespesa = async form => {
+  if ($('desp-grupo').value === PESSOAL) { await submitDespesaPessoal(form); return; }
   const metodo = $('desp-metodo').value;
   const participantes = getParticipantesSelecionados('desp');
   const valorTotal = parseMoney($('desp-valor').value);
@@ -946,6 +1016,25 @@ ACTIONS.submitDespesa = async form => {
   });
 };
 
+async function submitDespesaPessoal(form) {
+  const valorTotal = parseMoney($('desp-valor').value);
+  if (!$('desp-descricao').value.trim()) { showToast('Preencha a descrição.', true); vibrate(60); return; }
+  if (!(valorTotal > 0)) { showToast('Informe um valor maior que zero.', true); vibrate(60); return; }
+  const payload = {
+    grupo: PESSOAL, data: $('desp-data').value || todayStr(), descricao: $('desp-descricao').value.trim(),
+    categoria: $('desp-categoria').value, valorTotal
+  };
+  const tags = (TAG_DRAFTS['desp-tags-editor'] || []).slice();
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      const res = await api('addDespesa', { payload });
+      if (tags.length && res && res.row) saveTags('desp:' + res.row, tags);
+      vibrate(20);
+      showToast('Despesa pessoal adicionada!');
+      renderDespesaForm();
+    } catch (err) { onApiError(err); }
+  });
+}
 ACTIONS.updateParcelaPreview = () => {
   const valor = parseMoney($('compra-valor').value) || 0;
   const n = parseInt($('compra-nparc').value, 10) || 0;
@@ -1002,7 +1091,9 @@ async function renderPagamentoForm() {
 function renderPagamentoFormBody(compras) {
   const el = $('tab-pagamento');
   if (!compras.length) {
-    el.innerHTML = '<div class="card"><h3>Registrar pagamento</h3><p class="empty">Você não tem nenhuma parcela em aberto neste grupo 🎉</p></div>';
+    el.innerHTML = noPessoal()
+      ? '<div class="card"><h3>Registrar pagamento</h3><p class="empty">O conjunto pessoal não tem parcelas a pagar. Escolha um conjunto compartilhado no topo.</p></div>'
+      : '<div class="card"><h3>Registrar pagamento</h3><p class="empty">Você não tem nenhuma parcela em aberto neste conjunto 🎉</p></div>';
     return;
   }
   el.innerHTML = `
@@ -1065,6 +1156,18 @@ async function loadHistorico() {
 }
 function renderHistorico(data) {
   const el = $('tab-historico');
+  if (data.pessoalMode) {
+    el.innerHTML = `<div class="card"><h3>🔒 Despesas pessoais (só você vê)</h3>
+      ${data.despesas.length ? data.despesas.map(d => `
+        <div class="hist-item">
+          <div class="top"><span>${h(d.descricao)}</span><span>${fmtBRL(d.valor)}</span></div>
+          <div class="sub">${h(d.data)} · ${h(d.categoria)}</div>
+          <div id="tags-desp-${h(d.row)}"></div>
+          ${apagarBtn('pessoais', d.id, true)}
+        </div>`).join('') : '<p class="empty">Nenhuma despesa pessoal lançada ainda.</p>'}</div>`;
+    data.despesas.forEach(d => renderHistTags('tags-desp-' + d.row, 'desp:' + d.row));
+    return;
+  }
   const seg = (id, label) => `<button type="button" data-action="showHistSeg" data-seg="${id}" class="${HIST_SEG === id ? 'active' : ''}">${label}</button>`;
   const card = (id, inner) => `<div class="card ${HIST_SEG === id ? '' : 'hidden'}" id="hist-${id}">${inner}</div>`;
   el.innerHTML = `
@@ -1128,7 +1231,7 @@ async function renderCasa() {
 
   el.innerHTML = `
     <div class="card">
-      <h3>Minhas casas</h3>
+      <h3>Meus grupos</h3>
       ${casas.map(c => `
         <div class="list-row">
           <div>${h(c.nome)}${c.souDono ? '<span class="badge">admin</span>' : ''}${c.id === casa.id ? '<span class="badge">aberta</span>' : ''}</div>
@@ -1137,13 +1240,13 @@ async function renderCasa() {
       <div id="outra-casa-form"></div>
       ${OUTRA_CASA === null ? `
         <div class="btn-row">
-          <button class="secondary" type="button" data-action="outraCasa" data-modo="criar">+ Criar casa</button>
+          <button class="secondary" type="button" data-action="outraCasa" data-modo="criar">+ Criar grupo</button>
           <button class="secondary" type="button" data-action="outraCasa" data-modo="convite">Entrar com convite</button>
         </div>` : ''}
     </div>
 
     <div class="card">
-      <h3>Moradores de ${h(casa.nome)}</h3>
+      <h3>Pessoas em ${h(casa.nome)}</h3>
       ${membros.map(m => `
         <div class="list-row">
           <div>${h(m.nome)}${m.dono ? '<span class="badge">admin</span>' : ''}${m.uid === eu.uid ? '<span class="badge">você</span>' : ''}
@@ -1154,10 +1257,10 @@ async function renderCasa() {
 
     ${dono ? `
     <div class="card">
-      <h3>Convidar moradores</h3>
+      <h3>Convidar pessoas</h3>
       ${convite ? `
         <div class="convite-box">${h(convite)}</div>
-        <p class="hint">Mande o link abaixo. Quem abrir cria a conta e já entra na casa.</p>
+        <p class="hint">Mande o link abaixo. Quem abrir cria a conta e já entra no grupo.</p>
         <button class="primary" type="button" data-action="compartilharConvite" data-link="${h(link)}">Compartilhar link de convite</button>
         <div class="btn-row">
           <button class="secondary" type="button" data-action="novoConvite">Gerar outro código</button>
@@ -1168,8 +1271,8 @@ async function renderCasa() {
     </div>` : ''}
 
     <div class="card">
-      <h3>Grupos</h3>
-      <p class="hint" style="margin:-6px 0 8px">O grupo com todos inclui automaticamente quem entrar na casa.</p>
+      <h3>Conjuntos de despesas</h3>
+      <p class="hint" style="margin:-6px 0 8px">Organize as despesas do grupo (ex.: Contas fixas, Viagem). O conjunto marcado "todos" inclui automaticamente quem entrar.</p>
       ${grupos.map(g => `
         <div class="list-row">
           <div>${h(g.nome)}${g.todos ? '<span class="badge">todos</span>' : ''}
@@ -1177,13 +1280,22 @@ async function renderCasa() {
           ${!g.todos && (dono || g.criadoPor === eu.uid) ? `<button type="button" class="del-btn" data-action="editarGrupo" data-id="${h(g.id)}">Editar</button>` : ''}
         </div>`).join('')}
       <div id="grupo-form"></div>
-      ${GRUPO_EDITANDO === null ? '<button class="secondary" type="button" data-action="editarGrupo" data-id="">+ Novo grupo</button>' : ''}
+      ${GRUPO_EDITANDO === null ? '<button class="secondary" type="button" data-action="editarGrupo" data-id="">+ Novo conjunto</button>' : ''}
     </div>
+
+    ${dono ? `
+    <div class="card">
+      <h3>Despesas pessoais</h3>
+      <label class="participa-item">
+        <input type="checkbox" data-change="alternarPessoais" ${casa.despesasPessoais ? 'checked' : ''}> Permitir despesas pessoais neste grupo
+      </label>
+      <p class="hint">Cada pessoa ganha um conjunto "Pessoal (só você)": ninguém mais vê, nem quem administra, e não entra na divisão.</p>
+    </div>` : ''}
 
     <div class="card">
       <h3>Conta</h3>
       <p class="hint" style="margin-top:0">Entrou como ${h(eu.email)}</p>
-      ${!dono ? `<button class="secondary danger" type="button" data-action="sairDaCasa">Sair da casa ${h(casa.nome)}</button>` : ''}
+      ${!dono ? `<button class="secondary danger" type="button" data-action="sairDaCasa">Sair do grupo ${h(casa.nome)}</button>` : ''}
       <button class="secondary danger" type="button" data-action="logout">Sair deste aparelho</button>
     </div>
   `;
@@ -1196,8 +1308,10 @@ let OUTRA_CASA = null; // null | 'criar' | 'convite'
 function renderOutraCasaForm() {
   $('outra-casa-form').innerHTML = OUTRA_CASA === 'criar' ? `
     <form data-submit="criarOutraCasa" novalidate>
-      <label for="outra-casa-nome">Nome da nova casa</label>
-      <input type="text" id="outra-casa-nome" maxlength="40" placeholder="Ex.: Casa da praia" autocapitalize="sentences">
+      <label for="outra-casa-nome">Nome do novo grupo</label>
+      <input type="text" id="outra-casa-nome" maxlength="40" placeholder="Ex.: Viagem Chile" autocapitalize="sentences">
+      <label class="participa-item" style="margin-top:12px"><input type="checkbox" id="outra-casa-pessoais" checked> Incluir despesas pessoais</label>
+      <p class="hint">Cada pessoa ganha um conjunto "Pessoal" só dela, que ninguém mais vê.</p>
       <div class="btn-row">
         <button class="secondary" type="button" data-action="outraCasa" data-modo="">Cancelar</button>
         <button class="primary" type="submit">Criar</button>
@@ -1215,6 +1329,19 @@ function renderOutraCasaForm() {
   const input = $('outra-casa-form').querySelector('input');
   if (input) input.focus();
 }
+ACTIONS.alternarPessoais = async el => {
+  const ativo = el.checked;
+  if (!ativo && !confirm('Desligar as despesas pessoais? As que já foram lançadas ficam guardadas, mas o conjunto "Pessoal" some até você ligar de novo.')) {
+    el.checked = true; return;
+  }
+  try {
+    await api('despesasPessoais', { ativo });
+    STATE.config = await api('config');
+    STATE.casa.despesasPessoais = ativo;
+    applyGrupos(STATE.grupos);
+    showToast(ativo ? 'Despesas pessoais ligadas.' : 'Despesas pessoais desligadas.');
+  } catch (err) { el.checked = !ativo; onApiError(err); }
+};
 ACTIONS.outraCasa = el => { OUTRA_CASA = el.dataset.modo || null; renderCasa(); };
 async function abrirOutraCasa(fn, msg) {
   const user = Firebase.usuarioAtual();
@@ -1230,12 +1357,12 @@ async function abrirOutraCasa(fn, msg) {
 }
 ACTIONS.criarOutraCasa = async form => {
   const nome = $('outra-casa-nome').value.trim();
-  if (!nome) { showToast('Dê um nome para a casa.', true); return; }
+  if (!nome) { showToast('Dê um nome para o grupo.', true); return; }
   const user = Firebase.usuarioAtual();
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      await abrirOutraCasa(() => Firebase.criarCasa(nome, STATE.pessoa || user.displayName || user.email.split('@')[0]),
-        'Casa criada! Convide os moradores abaixo.');
+      await abrirOutraCasa(() => Firebase.criarCasa(nome, STATE.pessoa || user.displayName || user.email.split('@')[0], $('outra-casa-pessoais').checked),
+        'Grupo criado! Convide as pessoas abaixo.');
       switchTab('casa');
     } catch (err) { onApiError(err); }
   });
@@ -1247,21 +1374,21 @@ ACTIONS.entrarOutraCasa = async form => {
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
       await abrirOutraCasa(() => Firebase.entrarComConvite(codigo, STATE.pessoa || user.displayName || user.email.split('@')[0]),
-        'Você entrou na casa!');
+        'Você entrou no grupo!');
     } catch (err) { onApiError(err); }
   });
 };
 ACTIONS.trocarCasa = async el => {
   try {
-    await abrirOutraCasa(() => Firebase.carregarCasa(el.dataset.id), 'Casa aberta.');
+    await abrirOutraCasa(() => Firebase.carregarCasa(el.dataset.id), 'Grupo aberto.');
   } catch (err) { onApiError(err); }
 };
 ACTIONS.sairDaCasa = async () => {
-  const nome = STATE.casa ? STATE.casa.nome : 'esta casa';
-  if (!confirm('Sair de "' + nome + '"? Você deixa de ver os dados dela; seus lançamentos continuam no histórico da casa.')) return;
+  const nome = STATE.casa ? STATE.casa.nome : 'este grupo';
+  if (!confirm('Sair de "' + nome + '"? Você deixa de ver os dados dele; seus lançamentos continuam no histórico do grupo.')) return;
   try {
     await Firebase.sairDaCasa();
-    showToast('Você saiu da casa.');
+    showToast('Você saiu do grupo.');
     await abrirCasa(Firebase.usuarioAtual());
   } catch (err) { onApiError(err); }
 };
@@ -1269,10 +1396,8 @@ function renderGrupoForm(grupo) {
   const nomes = STATE.config.names;
   $('grupo-form').innerHTML = `
     <form data-submit="salvarGrupo" novalidate>
-      <label for="grupo-nome">${grupo ? 'Editar grupo' : 'Novo grupo'}</label>
-      <input type="text" id="grupo-nome" maxlength="30" placeholder="Ex.: Viagem de julho" value="${grupo ? h(grupo.nome) : ''}">
-      <label for="grupo-tipo">Tipo</label>
-      <select id="grupo-tipo">${optionsHtml(['Compartilhado', 'Pessoal'], grupo ? grupo.tipo : 'Compartilhado')}</select>
+      <label for="grupo-nome">${grupo ? 'Editar conjunto' : 'Novo conjunto de despesas'}</label>
+      <input type="text" id="grupo-nome" maxlength="30" placeholder="Ex.: Contas fixas, Viagem" value="${grupo ? h(grupo.nome) : ''}">
       <span class="field-label">Quem faz parte</span>
       <div class="participa-grid">
         ${nomes.map(n => `<label class="participa-item"><input type="checkbox" class="grupo-membro" data-nome="${h(n)}"
@@ -1282,21 +1407,21 @@ function renderGrupoForm(grupo) {
         <button class="secondary" type="button" data-action="cancelarGrupo">Cancelar</button>
         <button class="primary" type="submit">Salvar</button>
       </div>
-      ${grupo ? `<button class="secondary danger" type="button" data-action="excluirGrupo" data-id="${h(grupo.id)}" data-nome="${h(grupo.nome)}">Excluir grupo</button>` : ''}
+      ${grupo ? `<button class="secondary danger" type="button" data-action="excluirGrupo" data-id="${h(grupo.id)}" data-nome="${h(grupo.nome)}">Excluir conjunto</button>` : ''}
     </form>`;
   $('grupo-nome').focus();
 }
 ACTIONS.excluirGrupo = async el => {
   const n = await api('contarLancamentosGrupo', { id: el.dataset.id });
   const aviso = n
-    ? 'Excluir o grupo "' + el.dataset.nome + '" e APAGAR os ' + n + ' lançamento(s) dele? Isso não pode ser desfeito.'
-    : 'Excluir o grupo "' + el.dataset.nome + '"?';
+    ? 'Excluir o conjunto "' + el.dataset.nome + '" e APAGAR os ' + n + ' lançamento(s) dele? Isso não pode ser desfeito.'
+    : 'Excluir o conjunto "' + el.dataset.nome + '"?';
   if (!confirm(aviso)) return;
   try {
     await api('excluirGrupo', { id: el.dataset.id });
     GRUPO_EDITANDO = null;
     applyGrupos(await api('grupos'));
-    showToast('Grupo excluído.');
+    showToast('Conjunto excluído.');
     renderCasa();
   } catch (err) { onApiError(err); }
 };
@@ -1306,9 +1431,9 @@ ACTIONS.salvarGrupo = async form => {
   const membros = Array.from(document.querySelectorAll('.grupo-membro:checked')).map(i => i.dataset.nome);
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      await api('salvarGrupo', { id: GRUPO_EDITANDO || null, nome: $('grupo-nome').value, tipo: $('grupo-tipo').value, membros });
+      await api('salvarGrupo', { id: GRUPO_EDITANDO || null, nome: $('grupo-nome').value, tipo: 'Compartilhado', membros });
       GRUPO_EDITANDO = null;
-      showToast('Grupo salvo!');
+      showToast('Conjunto salvo!');
       applyGrupos(await api('grupos'));
       renderCasa();
     } catch (err) { onApiError(err); }

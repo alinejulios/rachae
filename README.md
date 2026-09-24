@@ -1,4 +1,4 @@
-# Rachaê — divisão de contas de casa (PWA + Firebase)
+# Rachaê — divisão de contas em grupo (PWA + Firebase)
 
 App que roda no navegador do celular (Safari no iPhone, Chrome no Android) e pode ser
 **instalado na tela inicial**. Os dados ficam no **Firebase (plano Spark, gratuito)**:
@@ -11,10 +11,20 @@ celular (PWA, Vercel) ──SDK──▶ Firebase Auth (email + senha)
                                   ▲ regras de segurança = firestore.rules
 ```
 
+## Como o app se organiza
+- **Grupo**: as pessoas que dividem contas (a casa, uma viagem, o casal…). Entra-se por **link de convite**.
+- **Conjuntos de despesas** dentro do grupo (ex.: "Contas fixas", "Viagem"). Cada conjunto pode ter
+  todo mundo ou só parte das pessoas, e os saldos são calculados por conjunto.
+- **Pessoal (só você)**: opção marcada ao criar o grupo. Cada pessoa ganha um conjunto privado para
+  acompanhar os próprios gastos — ninguém mais vê (nem quem administra) e não entra na divisão.
+
+No banco, grupo = coleção `households` e conjunto = `households/{id}/grupos` (nomes da primeira
+versão, mantidos para não migrar dados); despesas pessoais ficam em `households/{id}/pessoais/{uid}/despesas`.
+
 No plano Spark não existe Cloud Functions, então:
 - os **saldos são calculados no aparelho** ([`public/js/calc.js`](public/js/calc.js)), a partir dos lançamentos;
-- **toda a segurança fica nas regras do Firestore**: só quem é da casa lê os dados, cada um só
-  registra pagamento em nome próprio, só dá para entrar na casa com convite válido etc.
+- **toda a segurança fica nas regras do Firestore**: só quem é do grupo lê os dados, cada um só
+  registra pagamento em nome próprio, só dá para entrar no grupo com convite válido etc.
 
 ## Estrutura
 
@@ -22,7 +32,7 @@ No plano Spark não existe Cloud Functions, então:
 |---|---|
 | `public/` | O site (HTML/CSS/JS puro, sem build) — é o que a Vercel publica |
 | `public/firebase-config.js` | Configuração do app web do Firebase (passo 4) |
-| `public/js/api.js` | Login, casa, convites e leitura/gravação no Firestore |
+| `public/js/api.js` | Login, grupos, convites e leitura/gravação no Firestore |
 | `public/js/calc.js` | Cálculo de saldos, parcelas e gráficos (antes eram fórmulas da planilha) |
 | `firestore.rules` | Regras de segurança — **publique sempre que mudar** (passo 3) |
 | `legado/` | Versão antiga com Google Sheets + Apps Script (só referência) |
@@ -59,13 +69,14 @@ No plano Spark não existe Cloud Functions, então:
 ### 5. Publicar
 Faça commit e push; a Vercel publica sozinha em ~30 s.
 
-### 6. Criar a casa e convidar os moradores
+### 6. Criar o grupo e convidar as pessoas
 1. Abra o app → **Criar conta** (nome, email, senha).
-2. Em "Falta entrar numa casa", abra **Sou eu quem vai criar a casa** → dê um nome → **Criar casa**.
-3. Na tela **Casa** (ícone de pessoa no topo) → **Compartilhar link de convite**.
-4. Quem abrir o link cria a conta e já entra na casa. Para parar de aceitar gente nova: **Fechar convites**.
+2. Em "Falta entrar num grupo", abra **Quero criar um grupo novo** → nome → deixe marcado
+   **Incluir despesas pessoais** se quiser → **Criar grupo**.
+3. Na tela do grupo (ícone de pessoa no topo) → **Compartilhar link de convite**.
+4. Quem abrir o link cria a conta e já entra no grupo. Para parar de aceitar gente nova: **Fechar convites**.
 
-O código de convite fica guardado **só no aparelho de quem criou a casa** (o Firestore não
+O código de convite fica guardado **só no aparelho de quem criou o grupo** (o Firestore não
 deixa listar convites, de propósito). Se trocar de aparelho, é só tocar em **Gerar código
 de convite** de novo.
 
@@ -92,8 +103,9 @@ ser conferidos sem Firebase, direto no Node, importando `public/js/calc.js`.
 - **Sem limite de linhas** (a planilha lotava com 120 despesas).
 - **Tempo real:** quando alguém lança uma despesa, o saldo dos outros atualiza sozinho.
 - **Funciona offline:** dá para abrir e consultar sem internet; o que for lançado sincroniza depois.
-- **Login com senha**, "esqueci a senha" e entrada na casa **por convite**; o dono pode remover pessoas.
-- **Apagar lançamentos:** cada pessoa apaga o que lançou (o dono da casa apaga qualquer um).
-- **Grupos** (ex.: "Viagem") criados, editados e excluídos pelo próprio app, na tela Casa.
-- **Várias casas por pessoa:** crie ou entre em outras casas e troque entre elas na tela Casa.
-- Sem limite de 5 moradores.
+- **Login com senha**, "esqueci a senha" e entrada no grupo **por convite**; quem administra pode remover pessoas.
+- **Apagar lançamentos:** cada pessoa apaga o que lançou (quem administra o grupo apaga qualquer um).
+- **Conjuntos de despesas** criados, editados e excluídos pelo próprio app.
+- **Vários grupos por pessoa:** crie ou entre em outros grupos e troque entre eles.
+- **Despesas pessoais privadas**, ao lado das compartilhadas.
+- Sem limite de 5 pessoas.

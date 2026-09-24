@@ -1,5 +1,10 @@
 // Camada de dados do Rachaê sobre o Firebase (Auth + Firestore, plano Spark).
 //
+// Vocabulário: na tela, "grupo" = quem divide as contas (coleção `households`)
+// e "conjunto de despesas" = subdivisão dentro dele (coleção `grupos`). Os
+// nomes das coleções ficaram os da primeira versão para não migrar dados.
+// Despesas pessoais (privadas) ficam em households/{hid}/pessoais/{uid}/despesas.
+//
 // Mantém a mesma interface que o app usava com o Apps Script — api('dashboard'),
 // api('addDespesa', {payload}) etc. —, então as telas quase não mudaram. Os
 // cálculos de saldo (que antes eram fórmulas da planilha) estão em calc.js e
@@ -14,7 +19,10 @@ import {
   doc, getDoc, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, writeBatch, serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from '../firebase-config.js';
-import { montarDashboard, montarHistorico, membrosDoGrupo } from './calc.js';
+import { montarDashboard, montarHistorico, membrosDoGrupo, montarDashboardPessoal, montarHistoricoPessoal } from './calc.js';
+
+/** Valor especial do seletor de conjunto para o conjunto pessoal (privado). */
+export const PESSOAL = '__pessoal__';
 
 export class ApiError extends Error {
   constructor(message, code) { super(message); this.code = code; }
@@ -172,7 +180,7 @@ function validarNome(nome) {
 }
 
 /** Quem administra: cria a casa, o grupo "Casa" e o primeiro convite. */
-export const criarCasa = (nomeCasa, meuNome) => tenta(async () => {
+export const criarCasa = (nomeCasa, meuNome, despesasPessoais = true) => tenta(async () => {
   const u = usuarioAtual();
   const nome = validarNome(meuNome);
   const casaRef = doc(collection(fs, 'households'));
@@ -181,7 +189,8 @@ export const criarCasa = (nomeCasa, meuNome) => tenta(async () => {
   const b1 = writeBatch(fs);
   b1.set(casaRef, {
     nome: String(nomeCasa || 'Casa').trim().slice(0, 40) || 'Casa', ownerUid: u.uid,
-    categorias: CATEGORIAS_PADRAO, segmentos: SEGMENTOS_PADRAO, criadoEm: serverTimestamp()
+    categorias: CATEGORIAS_PADRAO, segmentos: SEGMENTOS_PADRAO, despesasPessoais: !!despesasPessoais,
+    criadoEm: serverTimestamp()
   });
   b1.set(doc(fs, 'households', casaRef.id, 'membros', u.uid), { nome, email: u.email, convite: '', entrouEm: serverTimestamp() });
   const perfil = await lerPerfil(u.uid);
@@ -190,7 +199,7 @@ export const criarCasa = (nomeCasa, meuNome) => tenta(async () => {
   // 2º lote: já como membro/dono — grupo padrão e convite
   const b2 = writeBatch(fs);
   b2.set(doc(collection(fs, 'households', casaRef.id, 'grupos')),
-    { nome: 'Casa', tipo: 'Compartilhado', todos: true, membros: [], criadoPor: u.uid });
+    { nome: 'Geral', tipo: 'Compartilhado', todos: true, membros: [], criadoPor: u.uid });
   b2.set(doc(fs, 'convites', codigo), { householdId: casaRef.id, ativo: true, criadoEm: serverTimestamp() });
   await b2.commit();
   await salvarConviteAtual(casaRef.id, codigo);
@@ -208,7 +217,7 @@ export function conviteAtual() {
 }
 /** Dono: gera um convite novo e desativa o anterior. */
 export const novoConvite = () => tenta(async () => {
-  if (!souDono()) throw new ApiError('Só quem criou a casa pode gerar convites.');
+  if (!souDono()) throw new ApiError('Só quem criou o grupo pode gerar convites.');
   const anterior = conviteAtual();
   const codigo = gerarCodigo();
   const b = writeBatch(fs);
@@ -260,7 +269,7 @@ export const entrarComConvite = (codigo, meuNome) => tenta(async () => {
 /** Sair de uma casa (quem não é dono). Os lançamentos continuam no histórico dela. */
 export const sairDaCasa = () => tenta(async () => {
   const u = usuarioAtual();
-  if (souDono()) throw new ApiError('Quem criou a casa não pode sair dela.');
+  if (souDono()) throw new ApiError('Quem criou o grupo não pode sair dele.');
   const hid = CASA.id;
   await deleteDoc(doc(fs, 'households', hid, 'membros', u.uid));
   const perfil = await lerPerfil(u.uid);
@@ -275,13 +284,26 @@ function pararEscuta() { unsubs.forEach(f => f()); unsubs = []; }
 
 function escutarDados(hid) {
   pararEscuta();
-  DB = { membros: [], grupos: [], despesas: [], compras: [], pagamentos: [] };
-  const colecoes = ['membros', 'grupos', 'despesas', 'compras', 'pagamentos'];
+  DB = { membros: [], grupos: [], despesas: [], compras: [], pagamentos: [], pessoais: [] };
+  const meuUid = usuarioAtual().uid;
+  const caminhos = {
+    membros: ['households', hid, 'membros'], grupos: ['households', hid, 'grupos'],
+    despesas: ['households', hid, 'despesas'], compras: ['households', hid, 'compras'],
+    pagamentos: ['households', hid, 'pagamentos'],
+    pessoais: ['households', hid, 'pessoais', meuUid, 'despesas']
+  };
+  const colecoes = Object.keys(caminhos);
   let pendentes = colecoes.length;
+  // Mudanças no próprio grupo (nome, opção de despesas pessoais)
+  unsubs.push(onSnapshot(doc(fs, 'households', hid), snap => {
+    if (!snap.exists() || !CASA || CASA.id !== hid) return;
+    CASA = { id: hid, ...snap.data() };
+    window.dispatchEvent(new CustomEvent('rachae:dados', { detail: { colecao: 'grupo' } }));
+  }, () => {}));
   return new Promise((resolve, reject) => {
     colecoes.forEach(nome => {
       let primeira = true;
-      unsubs.push(onSnapshot(collection(fs, 'households', hid, nome), snap => {
+      unsubs.push(onSnapshot(collection(fs, ...caminhos[nome]), snap => {
         DB[nome] = snap.docs.map(d => {
           const x = { id: d.id, ...d.data() };
           if (nome === 'membros') x.uid = d.id;
@@ -306,7 +328,7 @@ const uidPorNome = nome => {
 };
 const grupoPorNome = nome => {
   const g = DB.grupos.find(x => x.nome === nome);
-  if (!g) throw new ApiError('Grupo não encontrado: ' + nome);
+  if (!g) throw new ApiError('Conjunto não encontrado: ' + nome);
   return g;
 };
 const nomePorUid = uid => (DB.membros.find(m => m.uid === uid) || {}).nome || 'Ex-morador(a)';
@@ -337,7 +359,8 @@ const ACOES = {
       categorias: CASA.categorias || CATEGORIAS_PADRAO,
       segmentos: CASA.segmentos || SEGMENTOS_PADRAO,
       metodos: METODOS,
-      emailsConfigured: true
+      emailsConfigured: true,
+      despesasPessoais: !!CASA.despesasPessoais
     };
   },
   grupos() {
@@ -347,6 +370,7 @@ const ACOES = {
       .sort((a, b) => (b.todos - a.todos) || a.nome.localeCompare(b.nome, 'pt-BR'));
   },
   dashboard({ grupo }) {
+    if (grupo === PESSOAL) return montarDashboardPessoal(DB.pessoais);
     const u = usuarioAtual().uid;
     const g = DB.grupos.find(x => x.nome === grupo)
       || DB.grupos.find(x => membrosDoGrupo(x, DB.membros).has(u)) || DB.grupos[0];
@@ -358,10 +382,19 @@ const ACOES = {
     return ACOES.dashboard({ grupo }).comprasEmAberto;
   },
   historico({ grupo }) {
+    if (grupo === PESSOAL) return montarHistoricoPessoal(DB.pessoais);
     const g = DB.grupos.find(x => x.nome === grupo);
     return montarHistorico(DB, g && g.id, usuarioAtual().uid, souDono());
   },
   async addDespesa({ payload }) {
+    if (payload.grupo === PESSOAL) {
+      if (!CASA.despesasPessoais) throw new ApiError('Despesas pessoais estão desligadas neste grupo.');
+      const ref = await addDoc(collection(fs, 'households', CASA.id, 'pessoais', usuarioAtual().uid, 'despesas'), {
+        data: dataOk(payload.data), descricao: String(payload.descricao).trim().slice(0, 80),
+        categoria: payload.categoria, valor: centavos(payload.valorTotal), criadoEm: serverTimestamp()
+      });
+      return { ok: true, row: 'p:' + ref.id };
+    }
     const g = grupoPorNome(payload.grupo);
     const ref = await addDoc(collection(fs, 'households', CASA.id, 'despesas'), {
       data: dataOk(payload.data), descricao: String(payload.descricao).trim().slice(0, 80),
@@ -391,6 +424,10 @@ const ACOES = {
     return { ok: true };
   },
   async apagar({ colecao, id }) {
+    if (colecao === 'pessoais') {
+      await deleteDoc(doc(fs, 'households', CASA.id, 'pessoais', usuarioAtual().uid, 'despesas', id));
+      return { ok: true };
+    }
     if (!['despesas', 'compras', 'pagamentos'].includes(colecao)) throw new ApiError('Tipo inválido.');
     if (colecao === 'compras' && DB.pagamentos.some(p => p.compraId === id)) {
       throw new ApiError('Essa compra já tem pagamentos registrados. Apague os pagamentos primeiro.');
@@ -400,10 +437,10 @@ const ACOES = {
   },
   async salvarGrupo({ id, nome, tipo, membros }) {
     const n = String(nome || '').trim().slice(0, 30);
-    if (!n) throw new ApiError('Dê um nome ao grupo.');
-    if (DB.grupos.some(g => g.id !== id && g.nome.toLowerCase() === n.toLowerCase())) throw new ApiError('Já existe um grupo com esse nome.');
+    if (!n) throw new ApiError('Dê um nome ao conjunto.');
+    if (DB.grupos.some(g => g.id !== id && g.nome.toLowerCase() === n.toLowerCase())) throw new ApiError('Já existe um conjunto com esse nome.');
     const uids = (membros || []).map(uidPorNome);
-    if (!uids.length) throw new ApiError('Marque pelo menos uma pessoa no grupo.');
+    if (!uids.length) throw new ApiError('Marque pelo menos uma pessoa no conjunto.');
     if (id) {
       const atual = DB.grupos.find(g => g.id === id);
       await setDoc(doc(fs, 'households', CASA.id, 'grupos', id),
@@ -416,17 +453,17 @@ const ACOES = {
   },
   async excluirGrupo({ id }) {
     const g = DB.grupos.find(x => x.id === id);
-    if (!g) throw new ApiError('Grupo não encontrado.');
-    if (g.todos) throw new ApiError('O grupo com todos da casa não pode ser excluído.');
+    if (!g) throw new ApiError('Conjunto não encontrado.');
+    if (g.todos) throw new ApiError('O conjunto com todos do grupo não pode ser excluído.');
     const u = usuarioAtual().uid;
     const despesas = DB.despesas.filter(d => d.grupoId === id);
     const compras = DB.compras.filter(c => c.grupoId === id);
     const idsCompras = new Set(compras.map(c => c.id));
     const pagamentos = DB.pagamentos.filter(p => idsCompras.has(p.compraId));
     const temLancamentos = despesas.length + compras.length + pagamentos.length > 0;
-    if (!souDono() && g.criadoPor !== u) throw new ApiError('Só quem criou o grupo (ou o dono da casa) pode excluí-lo.');
+    if (!souDono() && g.criadoPor !== u) throw new ApiError('Só quem criou o conjunto (ou quem administra o grupo) pode excluí-lo.');
     if (temLancamentos && !souDono()) {
-      throw new ApiError('Esse grupo tem lançamentos. Só o dono da casa pode excluí-lo junto com eles.');
+      throw new ApiError('Esse conjunto tem lançamentos. Só quem administra o grupo pode excluí-lo junto com eles.');
     }
     // Apaga lançamentos (pagamentos antes das compras) e por último o grupo; lotes de até 450
     const refs = [
@@ -447,12 +484,18 @@ const ACOES = {
     return DB.despesas.filter(d => d.grupoId === id).length + idsCompras.size +
       DB.pagamentos.filter(p => idsCompras.has(p.compraId)).length;
   },
+  async despesasPessoais({ ativo }) {
+    if (!souDono()) throw new ApiError('Só quem criou o grupo muda essa opção.');
+    await updateDoc(doc(fs, 'households', CASA.id), { despesasPessoais: !!ativo });
+    CASA.despesasPessoais = !!ativo;
+    return { ok: true };
+  },
   membros() {
     return DB.membros.map(m => ({ nome: m.nome, email: m.email, uid: m.uid, dono: m.uid === CASA.ownerUid }))
       .sort((a, b) => b.dono - a.dono || a.nome.localeCompare(b.nome, 'pt-BR'));
   },
   async removerMembro({ uid }) {
-    if (!souDono()) throw new ApiError('Só quem criou a casa pode remover pessoas.');
+    if (!souDono()) throw new ApiError('Só quem criou o grupo pode remover pessoas.');
     await deleteDoc(doc(fs, 'households', CASA.id, 'membros', uid));
     return { ok: true };
   }

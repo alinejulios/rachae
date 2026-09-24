@@ -164,3 +164,44 @@ export function montarHistorico(db, grupoId, meUid, souDono) {
   }));
   return { despesas, compras, pagamentos };
 }
+
+// ------------------------------------------------------------------ despesas pessoais (privadas)
+// Não entram em saldos: são só para a pessoa acompanhar os próprios gastos.
+export function montarDashboardPessoal(despesas) {
+  const catTotals = {}, monthTotals = {}, catPorMesTotals = {};
+  despesas.forEach(d => {
+    catTotals[d.categoria] = (catTotals[d.categoria] || 0) + d.valor;
+    const mes = String(d.data || '').slice(0, 7);
+    if (!mes) return;
+    monthTotals[mes] = (monthTotals[mes] || 0) + d.valor;
+    catPorMesTotals[mes] = catPorMesTotals[mes] || {};
+    catPorMesTotals[mes][d.categoria] = (catPorMesTotals[mes][d.categoria] || 0) + d.valor;
+  });
+  const lista = obj => Object.keys(obj).map(cat => ({ categoria: cat, valor: reais(obj[cat]) })).sort((a, b) => b.valor - a.valor);
+  const catPorMes = {};
+  Object.keys(catPorMesTotals).forEach(m => { catPorMes[m] = lista(catPorMesTotals[m]); });
+  const hoje = new Date();
+  const mesAtual = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
+  return {
+    pessoalMode: true,
+    grupoAtual: 'Pessoal',
+    totalMes: reais(monthTotals[mesAtual] || 0),
+    totalGeral: reais(Object.values(monthTotals).reduce((s, v) => s + v, 0)),
+    qtdMes: despesas.filter(d => String(d.data || '').startsWith(mesAtual)).length,
+    pessoal: null, saldosPorPessoa: [], reembolsosPorPessoa: [], comprasEmAberto: [],
+    gastosPorCategoria: lista(catTotals),
+    evolucaoMensal: Object.keys(monthTotals).sort().map(mes => ({ mes, valor: reais(monthTotals[mes]) })),
+    catPorMes
+  };
+}
+
+export function montarHistoricoPessoal(despesas) {
+  return {
+    pessoalMode: true,
+    despesas: despesas.slice().sort(porDataDesc).slice(0, 50).map(d => ({
+      row: 'p:' + d.id, id: d.id, colecao: 'pessoais', data: dataBR(d.data), descricao: d.descricao,
+      categoria: d.categoria, valor: reais(d.valor), podeApagar: true
+    })),
+    compras: [], pagamentos: []
+  };
+}
