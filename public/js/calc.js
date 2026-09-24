@@ -92,11 +92,17 @@ export function montarDashboard(db, meUid, grupoId) {
   const reemb = {};
   membrosG.forEach(u => { reemb[u] = 0; });
   comprasGrupo.forEach(c => {
-    acumula(c.categoria, c.valor, c.data);
+    parcelasDaCompra(c).forEach(p => acumula(c.categoria, p.valor, p.mes + '-01'));
     const s = situacaoCompra(c, membrosG, db.pagamentos);
     Object.keys(s.impacto).forEach(u => { if (u in parc) parc[u] += s.impacto[u]; });
     if ((s.deve[meUid] || 0) > 1) {
-      comprasEmAberto.push({ id: c.id, descricao: c.descricao, saldoDevedor: reais(s.deve[meUid]), comprador: c.comprador, compradorNome: nome(c.comprador) });
+      const mesAtual = mesAtualISO();
+      const minhas = parcelasDaPessoa(c, s.parte[meUid] || 0, s.pago[meUid] || 0);
+      comprasEmAberto.push({
+        id: c.id, descricao: c.descricao, saldoDevedor: reais(s.deve[meUid]), comprador: c.comprador, compradorNome: nome(c.comprador),
+        vencido: reais(minhas.filter(p => p.mes <= mesAtual).reduce((t, p) => t + p.aberto, 0)),
+        parcelas: minhas.map(p => ({ num: p.num, mes: p.mes, valor: reais(p.valor), pago: reais(p.pago), aberto: reais(p.aberto) }))
+      });
     }
   });
   const compraPorId = Object.fromEntries(comprasGrupo.map(c => [c.id, c]));
@@ -143,6 +149,7 @@ export function montarDashboard(db, meUid, grupoId) {
     saldosPorPessoa,
     gastosPorCategoria: lista(catTotals),
     evolucaoMensal: Object.keys(monthTotals).sort().map(mes => ({ mes, valor: reais(monthTotals[mes]) })),
+    mesAtual: mesAtualISO(),
     catPorMes,
     reembolsosPorPessoa: Object.keys(reemb).map(u => ({ nome: nome(u), valor: reais(reemb[u]) })).sort((a, b) => b.valor - a.valor),
     comprasEmAberto,
@@ -154,9 +161,9 @@ export function montarDashboard(db, meUid, grupoId) {
  * Saldo de cada pessoa, mês a mês (centavos). A soma de todos os meses é igual
  * ao saldo geral:
  *  - despesa: conta no mês da data (acerto: no mês de referência escolhido, `mesRef`);
- *  - compra parcelada: cada parcela de cada participante conta no mês em que vence
- *    (o comprador recebe a soma das parcelas dos outros naquele mês);
- *  - pagamento de parcela: conta no mês em que foi feito (quem pagou +, comprador −).
+ *  - compra parcelada: o que falta pagar de cada parcela conta no mês em que ela vence
+ *    (o comprador recebe a soma das parcelas dos outros naquele mês). Pagamentos abatem
+ *    da parcela mais antiga para a mais nova — pagar a mais adianta as próximas.
  * @returns {Object<string, Object<string, number>>} { 'aaaa-mm': { uid: centavos } }
  */
 export function saldosPorMes(db, grupoId, membrosG) {
@@ -174,22 +181,14 @@ export function saldosPorMes(db, grupoId, membrosG) {
   });
   const compras = db.compras.filter(c => c.grupoId === grupoId);
   compras.forEach(c => {
-    const parte = devidoPorPessoa(c, membrosG);
-    Object.keys(parte).forEach(u => {
+    const s = situacaoCompra(c, membrosG, db.pagamentos);
+    Object.keys(s.parte).forEach(u => {
       if (u === c.comprador) return;
-      parcelasDaCompra({ ...c, valor: parte[u] }).forEach(p => {
-        soma(p.mes, u, -p.valor);
-        if (membrosG.has(c.comprador)) soma(p.mes, c.comprador, p.valor);
+      parcelasDaPessoa(c, s.parte[u], s.pago[u]).forEach(p => {
+        soma(p.mes, u, -p.aberto);
+        if (membrosG.has(c.comprador)) soma(p.mes, c.comprador, p.aberto);
       });
     });
-  });
-  const compraPorId = Object.fromEntries(compras.map(c => [c.id, c]));
-  db.pagamentos.forEach(p => {
-    const c = compraPorId[p.compraId];
-    if (!c || p.pessoa === c.comprador) return;
-    const mes = String(p.data || '').slice(0, 7);
-    if (membrosG.has(p.pessoa)) soma(mes, p.pessoa, p.valor);
-    if (membrosG.has(c.comprador)) soma(mes, c.comprador, -p.valor);
   });
   return out;
 }
@@ -270,7 +269,29 @@ export function parcelasDaCompra(compra) {
     out.push({ mes: somaMeses(mes0, i), valor: base + (resto > 0 ? 1 : 0), num: i + 1 });
     if (resto > 0) resto--;
   }
+  // Adiantamento (como no cartão): as últimas parcelas passam a contar no mês em que foram adiantadas
+  let fim = n;
+  (compra.adiantamentos || []).forEach(a => {
+    for (let k = 0; k < a.qtd && fim > 0; k++) {
+      const p = out[--fim];
+      if (p.mes > a.mes) { p.mes = a.mes; p.adiantada = true; }
+    }
+  });
   return out;
+}
+
+/**
+ * Parcelas de UMA pessoa numa compra compartilhada, com o que já foi pago.
+ * Pagamentos abatem da parcela mais antiga para a mais nova (o excedente adianta as próximas).
+ * @returns {{num, mes, valor, pago, aberto}[]} centavos
+ */
+export function parcelasDaPessoa(compra, parteCentavos, pagoCentavos) {
+  let sobra = Math.max(0, pagoCentavos || 0);
+  return parcelasDaCompra({ ...compra, valor: parteCentavos }).map(p => {
+    const pago = Math.min(p.valor, sobra);
+    sobra -= pago;
+    return { ...p, pago, aberto: p.valor - pago };
+  });
 }
 
 function mesAtualISO() {
@@ -304,6 +325,7 @@ export function montarDashboardPessoal(despesas, compras = []) {
   Object.keys(catPorMesTotals).forEach(m => { catPorMes[m] = lista(catPorMesTotals[m]); });
   return {
     pessoalMode: true,
+    mesAtual,
     grupoAtual: 'Pessoal',
     totalMes: reais(monthTotals[mesAtual] || 0),
     parcelasFuturas: reais(parcelasFuturas),
@@ -330,9 +352,27 @@ export function montarHistoricoPessoal(despesas, compras = []) {
         row: 'pc:' + c.id, id: c.id, data: dataBR(c.data), descricao: c.descricao, categoria: c.categoria,
         valorTotal: reais(c.valor), nParcelas: parcelas.length, valorParcela: reais(parcelas[parcelas.length - 1].valor),
         parcelaAtual: Math.min(pagas, parcelas.length),
+        aVencer: parcelas.filter(p => p.mes > mesAtual).length,
         restante: reais(parcelas.filter(p => p.mes > mesAtual).reduce((s, p) => s + p.valor, 0)), podeApagar: true
       };
     }),
     pagamentos: []
   };
+}
+
+/**
+ * Meu saldo em cada conjunto de um grupo (para o resumo do Perfil).
+ * @returns {{conjunto:string, saldo:number, vencido:number}[]} reais; só conjuntos dos quais faço parte
+ */
+export function meusSaldosNoGrupo(db, meUid) {
+  const mesAtual = mesAtualISO();
+  return db.grupos.map(g => {
+    const membrosG = membrosDoGrupo(g, db.membros);
+    if (!membrosG.has(meUid)) return null;
+    const d = montarDashboard(db, meUid, g.id);
+    // "vencido" = soma dos meses até o atual (o que já deveria ter sido acertado)
+    const vencido = Object.keys(d.meses).filter(m => m <= mesAtual)
+      .reduce((t, m) => t + Math.round(((d.meses[m].saldos.find(x => x._uid === meUid) || {}).saldo || 0) * 100), 0);
+    return { conjunto: g.nome, saldo: d.pessoal ? d.pessoal.saldoGeral : 0, vencido: reais(vencido) };
+  }).filter(Boolean);
 }

@@ -20,7 +20,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from '../firebase-config.js';
 import { normalizarChave } from './pix.js';
-import { montarDashboard, montarHistorico, membrosDoGrupo, montarDashboardPessoal, montarHistoricoPessoal } from './calc.js';
+import { montarDashboard, montarHistorico, membrosDoGrupo, montarDashboardPessoal, montarHistoricoPessoal, meusSaldosNoGrupo } from './calc.js';
 
 /** Valor especial do seletor de conjunto para o conjunto pessoal (privado). */
 export const PESSOAL = '__pessoal__';
@@ -594,19 +594,37 @@ const ACOES = {
     return (eu && eu.pix) || null;
   },
   /** Registra que eu paguei alguém (acerto de contas): zera a dívida nos saldos, não conta como gasto. */
-  async registrarAcerto({ para, valor, grupo, mesRef }) {
+  /**
+   * Registra que eu paguei alguém (acerto de contas). `partes` divide o valor entre meses de
+   * referência (ex.: quitar agosto e setembro de uma vez); sem `partes`, vai tudo em `mesRef`.
+   */
+  async registrarAcerto({ para, valor, grupo, mesRef, partes }) {
     const g = grupoPorNome(grupo);
     const u = usuarioAtual().uid;
     if (para === u) throw new ApiError('Não dá para acertar contas consigo mesma(o).');
     if (!DB.membros.some(m => m.uid === para)) throw new ApiError('Essa pessoa não está mais no grupo.');
-    await addDoc(collection(fs, 'households', CASA.id, 'despesas'), {
+    const mesOk = m => (/^\d{4}-\d{2}$/.test(m || '') ? m : new Date().toISOString().slice(0, 7));
+    const lista = (partes && partes.length ? partes : [{ mesRef, valor }]).filter(p => Number(p.valor) > 0);
+    const b = writeBatch(fs);
+    lista.forEach(p => b.set(doc(collection(fs, 'households', CASA.id, 'despesas')), {
       data: new Date().toISOString().slice(0, 10),
       descricao: ('Acerto: ' + nomePorUid(u) + ' → ' + nomePorUid(para)).slice(0, 80),
-      categoria: 'Acerto', segmento: 'À Vista', grupoId: g.id, valor: centavos(valor), pagoPor: u,
-      metodo: 'Igual', participantes: [para], divisao: null, acerto: true,
-      mesRef: /^\d{4}-\d{2}$/.test(mesRef || '') ? mesRef : new Date().toISOString().slice(0, 7),
+      categoria: 'Acerto', segmento: 'À Vista', grupoId: g.id, valor: centavos(p.valor), pagoPor: u,
+      metodo: 'Igual', participantes: [para], divisao: null, acerto: true, mesRef: mesOk(p.mesRef),
       criadoPor: u, criadoEm: serverTimestamp()
-    });
+    }));
+    await b.commit();
+    return { ok: true };
+  },
+  /** Pessoal: adianta as últimas `qtd` parcelas de uma compra para este mês. */
+  async adiantarParcelasPessoal({ id, qtd }) {
+    const c = DB.pessoaisCompras.find(x => x.id === id);
+    if (!c) throw new ApiError('Compra não encontrada.');
+    const n = parseInt(qtd, 10);
+    if (!(n >= 1 && n <= 60)) throw new ApiError('Informe quantas parcelas adiantar.');
+    const mes = new Date().toISOString().slice(0, 7);
+    const lista = [...(c.adiantamentos || []), { mes, qtd: n }].slice(-60);
+    await updateDoc(doc(fs, 'households', CASA.id, 'pessoais', usuarioAtual().uid, 'compras', id), { adiantamentos: lista });
     return { ok: true };
   },
   meuNome() {
@@ -640,6 +658,43 @@ const ACOES = {
     return { ok: true };
   }
 };
+
+/**
+ * Resumo do Perfil: meu saldo em todos os grupos e conjuntos. O grupo aberto usa os dados
+ * em tempo real; os outros são lidos uma vez (e guardados por 1 minuto).
+ */
+let RESUMO_CACHE = { em: 0, dados: null };
+export const resumoGeral = (forcar = false) => tenta(async () => {
+  const u = usuarioAtual();
+  if (!forcar && RESUMO_CACHE.dados && Date.now() - RESUMO_CACHE.em < 60000) return atualizarResumoAtual(RESUMO_CACHE.dados);
+  const { casas } = await lerPerfil(u.uid);
+  const out = [];
+  for (const hid of casas) {
+    if (CASA && hid === CASA.id) { out.push({ id: hid, nome: CASA.nome, atual: true, conjuntos: [] }); continue; }
+    try {
+      const casa = await getDoc(doc(fs, 'households', hid));
+      if (!casa.exists()) continue;
+      const ler = async col => (await getDocs(collection(fs, 'households', hid, col))).docs.map(d => {
+        const x = { id: d.id, ...d.data() };
+        if (col === 'membros') x.uid = d.id;
+        return x;
+      });
+      const [membros, grupos, despesas, compras, pagamentos] = await Promise.all(
+        ['membros', 'grupos', 'despesas', 'compras', 'pagamentos'].map(ler));
+      out.push({ id: hid, nome: casa.data().nome, conjuntos: meusSaldosNoGrupo({ membros, grupos, despesas, compras, pagamentos }, u.uid) });
+    } catch (e) { /* grupo inacessível */ }
+  }
+  RESUMO_CACHE = { em: Date.now(), dados: out };
+  return atualizarResumoAtual(out);
+});
+function atualizarResumoAtual(lista) {
+  return lista.map(g => (CASA && g.id === CASA.id && DB)
+    ? { ...g, nome: CASA.nome, atual: true, conjuntos: meusSaldosNoGrupo(DB, usuarioAtual().uid) }
+    : { ...g, atual: false })
+    .map(g => ({ ...g,
+      aPagar: Math.round(g.conjuntos.filter(c => c.saldo < 0).reduce((t, c) => t - c.saldo, 0) * 100) / 100,
+      aReceber: Math.round(g.conjuntos.filter(c => c.saldo > 0).reduce((t, c) => t + c.saldo, 0) * 100) / 100 }));
+}
 
 /** Anexa a chave Pix de quem recebe às sugestões de acerto e às compras em aberto. */
 function comPix(d) {

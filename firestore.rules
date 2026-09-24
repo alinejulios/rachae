@@ -209,7 +209,10 @@ service cloud.firestore {
           && str(request.resource.data.categoria, 1, 40)
           && centavos(request.resource.data.valor)
           && request.resource.data.nParcelas is int && request.resource.data.nParcelas >= 1 && request.resource.data.nParcelas <= 60;
-        allow update: if false;
+        // Única alteração permitida: adiantar parcelas
+        allow update: if isMember(hid) && uid() == donoId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['adiantamentos'])
+          && request.resource.data.adiantamentos is list && request.resource.data.adiantamentos.size() <= 60;
       }
 
       // -------------------------------------------------------------- pagamentos de parcela

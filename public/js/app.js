@@ -513,6 +513,7 @@ function renderDashboard(d) {
 
   el.innerHTML = `
     <div id="install-card"></div>
+    <div id="resumo-painel"></div>
     <div class="card hero">
       <div class="label">Seu saldo geral${h(grupoLabel)}</div>
       <div class="value ${statusClass}">${fmtBRL(Math.abs(p.saldoGeral))}</div>
@@ -542,6 +543,7 @@ function renderDashboard(d) {
         ? 'O menor número de Pix para deixar todo mundo quitado.'
         : 'Quem paga quem só pelo que é deste mês. Cada Pix registrado abate o saldo do mês e o total.'}</p>
       <div id="acertos-lista">${acertosHtml(d)}</div>
+      <div id="pendencias"></div>
     </div>
 
     <div class="card">
@@ -579,6 +581,7 @@ function renderDashboard(d) {
   renderInstallCard();
   renderSaldoBars(d.saldosPorPessoa || []);
   renderSaldoMes(d);
+  mostrarResumoNoPainel();
   renderChartMensal();
   renderChartCategoriaMes();
   renderChartReembolsos(d.reembolsosPorPessoa || []);
@@ -705,7 +708,15 @@ function renderChartMensal() {
   if (!toggleChartEmpty('chart-mensal', 'chart-mensal-empty', semNada)) return;
   if (semNada) { hintEl.textContent = ''; return; }
 
-  const datasets = [{ label: String(ano), data: atual, backgroundColor: cssVar('--brand-blue'), borderRadius: 4, maxBarThickness: 18 }];
+  // Meses que ainda não chegaram (parcelas a vencer) ficam em tom mais claro
+  const mesAtual = d.mesAtual || mesAtualKey();
+  const futuro = MESES_ABREV.map((_, i) => (ano + '-' + String(i + 1).padStart(2, '0')) > mesAtual);
+  const azul = cssVar('--brand-blue');
+  const datasets = [{
+    label: String(ano), data: atual, borderRadius: 4, maxBarThickness: 18,
+    backgroundColor: futuro.map(f => (f ? azul + '59' : azul)),
+    borderColor: azul, borderWidth: futuro.map(f => (f ? 1.5 : 0)), borderDash: [3, 3]
+  }];
   if (temAnoAnterior) {
     datasets.push({ label: String(ano - 1), data: anterior, backgroundColor: cssVar('--brand-aqua'), borderRadius: 4, maxBarThickness: 18 });
   }
@@ -716,7 +727,7 @@ function renderChartMensal() {
       ...baseChartOptions(),
       plugins: {
         legend: { display: temAnoAnterior, position: 'top', align: 'end', labels: { boxWidth: 12, font: { size: 12 }, color: cssVar('--text-secondary') } },
-        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + fmtBRL(c.raw) } }
+        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + fmtBRL(c.raw) + (c.datasetIndex === 0 && futuro[c.dataIndex] ? ' (a vencer)' : '') } }
       },
       scales: {
         y: { grid: { color: cssVar('--gridline') }, border: { display: false }, ticks: { callback: fmtBRLCurto, color: cssVar('--text-muted'), maxTicksLimit: 5 } },
@@ -725,6 +736,7 @@ function renderChartMensal() {
     }
   });
 
+  const totalFuturo = atual.filter((_, i) => futuro[i]).reduce((t, v) => t + v, 0);
   const periodoLabel = mesesConsiderados < 12 ? ' (' + MESES_ABREV[0] + '–' + MESES_ABREV[mesesConsiderados - 1] + ')' : '';
   if (temAnoAnterior) {
     const diff = totalAtual - totalAnterior;
@@ -736,6 +748,7 @@ function renderChartMensal() {
     hintEl.className = 'hint';
     hintEl.textContent = 'Total ' + ano + periodoLabel + ': ' + fmtBRL(totalAtual);
   }
+  if (totalFuturo > 0) hintEl.textContent += ' · Barras claras: ' + fmtBRL(totalFuturo) + ' em parcelas a vencer.';
 }
 
 function renderChartCategoriaMes() {
@@ -1170,13 +1183,15 @@ function renderPagamentoFormBody(compras) {
     <form class="card" data-submit="submitPagamento" novalidate autocomplete="off">
       <h3>Registrar pagamento de parcela</h3>
       <label for="pag-compra">Compra</label>
-      <select id="pag-compra" data-change="updateSaldoDevedorHint">
+      <select id="pag-compra" data-change="trocarCompraPagamento">
         ${compras.map((c, i) => `<option value="${h(c.id)}" data-i="${i}" data-saldo="${c.saldoDevedor}">${h(c.descricao)} — ${fmtBRL(c.saldoDevedor)}</option>`).join('')}
       </select>
       <p class="hint" id="pag-saldo-hint"></p>
+      <div id="pag-parcelas"></div>
       <label for="pag-valor">Valor a pagar</label>
       ${moneyInput('pag-valor', 'data-input="atualizarPixParcela"')}
-      <button type="button" class="link-btn" data-action="pagarTudo">Usar saldo total</button>
+      <div class="chips" id="pag-atalhos"></div>
+      <p class="hint">O pagamento abate da parcela mais antiga para a mais nova — pagar a mais adianta as próximas.</p>
       <span class="field-label">Pagar com Pix</span>
       <div id="pag-pix"></div>
       <label for="pag-data">Data do pagamento</label>
@@ -1190,9 +1205,37 @@ function saldoSelecionado() {
   const sel = $('pag-compra');
   return Number(sel.options[sel.selectedIndex].dataset.saldo) || 0;
 }
+function compraSelecionada() { return COMPRAS_ABERTAS[Number($('pag-compra').selectedOptions[0].dataset.i)]; }
 ACTIONS.updateSaldoDevedorHint = () => {
-  const c = COMPRAS_ABERTAS[Number($('pag-compra').selectedOptions[0].dataset.i)];
+  const c = compraSelecionada();
   $('pag-saldo-hint').textContent = 'Você deve ' + fmtBRL(saldoSelecionado()) + ' para ' + (c ? c.compradorNome : 'quem comprou') + ' nesta compra.';
+  const mesAtual = mesAtualKey();
+  const parcelas = (c && c.parcelas) || [];
+  $('pag-parcelas').innerHTML = parcelas.length ? `<div class="parcelas-lista">${parcelas.map(p => {
+    const status = p.aberto <= 0.004 ? '<span class="tag-st ok">paga</span>'
+      : p.mes < mesAtual ? '<span class="tag-st atraso">atrasada</span>'
+      : p.mes === mesAtual ? '<span class="tag-st mes">vence este mês</span>'
+      : '<span class="tag-st fut">a vencer</span>';
+    return `<div class="parcela-row"><span>${p.num}ª · ${labelMes(p.mes).replace(' de ', '/')}</span>
+      <span>${p.pago > 0 && p.aberto > 0.004 ? 'falta ' + fmtBRL(p.aberto) : fmtBRL(p.valor)} ${status}</span></div>`;
+  }).join('')}</div>` : '';
+  // Atalhos: vencidas (até este mês), próxima parcela (adiantar) e quitar tudo
+  const vencido = (c && c.vencido) || 0;
+  const proxima = parcelas.find(p => p.aberto > 0.004 && p.mes > mesAtual);
+  const valorProxima = vencido + (proxima ? proxima.aberto : 0);
+  const atalhos = [];
+  if (vencido > 0) atalhos.push(['Pagar o que venceu', vencido]);
+  if (proxima) atalhos.push([vencido > 0 ? 'Vencido + adiantar 1' : 'Adiantar a próxima', valorProxima]);
+  atalhos.push(['Quitar tudo', saldoSelecionado()]);
+  $('pag-atalhos').innerHTML = atalhos.map(([rot, v]) =>
+    `<button type="button" class="chip" data-action="usarValorPagamento" data-valor="${v}">${rot} · ${fmtBRL(v)}</button>`).join('');
+  if (!$('pag-valor').value) $('pag-valor').value = (vencido > 0 ? vencido : (proxima ? proxima.aberto : saldoSelecionado()))
+    .toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  ACTIONS.atualizarPixParcela();
+};
+ACTIONS.trocarCompraPagamento = () => { $('pag-valor').value = ''; ACTIONS.updateSaldoDevedorHint(); };
+ACTIONS.usarValorPagamento = el => {
+  $('pag-valor').value = Number(el.dataset.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   ACTIONS.atualizarPixParcela();
 };
 // Valor digitado (ou o saldo todo, se vazio) vai dentro do QR Code
@@ -1203,10 +1246,6 @@ ACTIONS.atualizarPixParcela = () => {
   const valor = digitado > 0 ? digitado : saldoSelecionado();
   $('pag-pix').innerHTML = pixPainelHtml({ pix: c.pix, valor, paraNome: c.compradorNome }) +
     '<p class="hint">Depois de pagar no banco, toque em "Registrar pagamento" abaixo.</p>';
-};
-ACTIONS.pagarTudo = () => {
-  $('pag-valor').value = saldoSelecionado().toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  ACTIONS.atualizarPixParcela();
 };
 ACTIONS.submitPagamento = async form => {
   const valor = parseMoney($('pag-valor').value);
@@ -1256,6 +1295,7 @@ function renderHistorico(data) {
           <div class="sub">${h(c.data)} · ${h(c.categoria)} · ${c.nParcelas}x de ${fmtBRL(c.valorParcela)} ·
             ${c.parcelaAtual >= c.nParcelas ? 'quitada' : 'parcela ' + c.parcelaAtual + '/' + c.nParcelas + ' · faltam ' + fmtBRL(c.restante)}</div>
           <div id="tags-compra-${h(c.row)}"></div>
+          ${c.aVencer > 0 ? `<button type="button" class="del-btn" style="margin-right:14px" data-action="adiantarPessoal" data-id="${h(c.id)}" data-max="${c.aVencer}" data-parcela="${c.valorParcela}">Adiantar parcelas</button>` : ''}
           ${apagarBtn('pessoaisCompras', c.id, true)}
         </div>`).join('') : '<p class="empty">Nenhuma compra parcelada pessoal ainda.</p>'}</div>`;
     data.despesas.forEach(d => renderHistTags('tags-desp-' + d.row, 'desp:' + d.row));
@@ -1293,6 +1333,19 @@ function renderHistorico(data) {
   data.despesas.forEach(d => renderHistTags('tags-desp-' + d.row, 'desp:' + d.row));
   data.compras.forEach(c => renderHistTags('tags-compra-' + c.id, 'compra:' + c.id));
 }
+ACTIONS.adiantarPessoal = async el => {
+  const max = Number(el.dataset.max);
+  const resp = prompt('Quantas parcelas adiantar para este mês? (1 a ' + max + ', de ' + fmtBRL(el.dataset.parcela) + ' cada)\n' +
+    'Como no cartão, as últimas parcelas passam a contar agora.', String(Math.min(1, max)));
+  if (resp === null) return;
+  const qtd = parseInt(resp, 10);
+  if (!(qtd >= 1 && qtd <= max)) { showToast('Digite um número de 1 a ' + max + '.', true); return; }
+  try {
+    await api('adiantarParcelasPessoal', { id: el.dataset.id, qtd });
+    showToast(qtd + (qtd > 1 ? ' parcelas adiantadas.' : ' parcela adiantada.'));
+    loadHistorico();
+  } catch (err) { onApiError(err); }
+};
 function apagarBtn(colecao, id, pode) {
   return pode ? `<button type="button" class="del-btn" data-action="apagarItem" data-colecao="${colecao}" data-id="${h(id)}">Apagar</button>` : '';
 }
@@ -1469,9 +1522,35 @@ ACTIONS.escolherPeriodoAcerto = el => {
   ACERTO_ABERTO = null;
   renderDashboard(STATE.dashboard);
 };
+/** Meses até o atual em que meu saldo ficou negativo (dívidas antigas ainda não acertadas). */
+function mesesEmAberto(d) {
+  const eu = Firebase.usuarioAtual().uid;
+  const atual = mesAtualKey();
+  return Object.keys(d.meses || {}).filter(m => m <= atual).sort()
+    .map(m => ({ mes: m, saldo: (d.meses[m].saldos.find(s => s._uid === eu) || { saldo: 0 }).saldo }))
+    .filter(x => x.saldo < -0.004);
+}
+function pendenciasHtml(d) {
+  const lista = mesesEmAberto(d).filter(x => ACERTO_MES === 'tudo' || x.mes !== STATE.mesAcerto);
+  if (!lista.length) return '';
+  return `<div class="pendencias"><span class="field-label" style="margin-top:4px">Meses com saldo em aberto</span>
+    ${lista.map(x => `<div class="list-row"><div>${labelMes(x.mes)}<div class="sub">você deve</div></div>
+      <div style="display:flex;align-items:center;gap:10px"><span class="acerto-valor status-critical">${fmtBRL(-x.saldo)}</span>
+      <button type="button" class="del-btn" data-action="irParaMesAcerto" data-mes="${x.mes}">Pagar</button></div></div>`).join('')}</div>`;
+}
+ACTIONS.irParaMesAcerto = el => {
+  ACERTO_MES = 'mes';
+  STATE.mesAcerto = el.dataset.mes;
+  ACERTO_ABERTO = null;
+  renderDashboard(STATE.dashboard);
+  const card = $('acertos-lista');
+  if (card) card.closest('.card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
 function renderSaldoMes(d) {
   const el = $('saldo-mes');
   if (!el) return;
+  const pend = $('pendencias');
+  if (pend) pend.innerHTML = pendenciasHtml(d);
   if (ACERTO_MES === 'tudo') { el.innerHTML = ''; return; }
   const m = (d.meses || {})[STATE.mesAcerto];
   const eu = Firebase.usuarioAtual().uid;
@@ -1484,11 +1563,24 @@ function renderSaldoMes(d) {
 ACTIONS.registrarAcerto = async el => {
   const a = listaAcertos(STATE.dashboard)[Number(el.dataset.i)];
   const mesRef = ACERTO_MES === 'tudo' ? mesAtualKey() : STATE.mesAcerto;
-  const quando = ACERTO_MES === 'tudo' ? '' : ' referente a ' + labelMes(mesRef).toLowerCase();
+  let partes = null;
+  if (ACERTO_MES === 'tudo' && a) {
+    // Quita os meses em aberto do mais antigo para o mais novo; o que sobrar fica no mês atual
+    let resta = Math.round(a.valor * 100);
+    partes = [];
+    mesesEmAberto(STATE.dashboard).forEach(x => {
+      const v = Math.min(resta, Math.round(-x.saldo * 100));
+      if (v > 0) { partes.push({ mesRef: x.mes, valor: v / 100 }); resta -= v; }
+    });
+    if (resta > 0) partes.push({ mesRef, valor: resta / 100 });
+  }
+  const quando = ACERTO_MES === 'tudo'
+    ? (partes && partes.length > 1 ? ' (quitando ' + partes.map(x => labelMes(x.mesRef).split(' de ')[0].toLowerCase()).join(', ') + ')' : '')
+    : ' referente a ' + labelMes(mesRef).toLowerCase();
   if (!a || !confirm('Confirmar que você pagou ' + fmtBRL(a.valor) + ' para ' + a.paraNome + quando + '? Isso abate o saldo total e o do mês.')) return;
   await withBusy(el, async () => {
     try {
-      await api('registrarAcerto', { para: a.para, valor: a.valor, grupo: STATE.grupoAtual, mesRef });
+      await api('registrarAcerto', { para: a.para, valor: a.valor, grupo: STATE.grupoAtual, mesRef, partes });
       ACERTO_ABERTO = null;
       vibrate(20);
       showToast('Pagamento registrado! Saldos atualizados.');
@@ -1511,7 +1603,7 @@ async function renderCasa() {
   const eu = Firebase.usuarioAtual();
   el.innerHTML = `
     <h2 class="page-title">Ajustes de ${h(casa.nome)}</h2>
-    <p class="escopo">⚙️ Tudo aqui vale só para este grupo. Para trocar de grupo ou sair da conta, toque no nome do grupo no topo.</p>
+    <p class="escopo">⚙️ Tudo aqui vale só para este grupo. Para ver todos os seus grupos, trocar de grupo ou sair da conta, toque no nome do grupo no topo (Perfil).</p>
     <div class="card">
       ${EDITANDO_NOME === 'grupo' ? `
         <form data-submit="salvarNomeGrupo" novalidate>
@@ -1612,7 +1704,10 @@ async function renderMeusGrupos() {
   const eu = Firebase.usuarioAtual();
   const casas = await Firebase.minhasCasas().catch(() => []);
   el.innerHTML = `
-    <h2 class="page-title">Meus grupos</h2>
+    <h2 class="page-title">Perfil</h2>
+    <div class="card" id="resumo-perfil"><div class="spinner">Somando todos os grupos...</div></div>
+
+    <h2 class="page-title" style="margin-top:22px">Meus grupos</h2>
     <p class="page-sub">Toque num grupo para abrir. Os ajustes de cada grupo ficam na engrenagem ⚙️, dentro dele.</p>
     <div class="card">
       ${casas.map(c => `
@@ -1639,6 +1734,53 @@ async function renderMeusGrupos() {
     </div>
   `;
   if (OUTRA_CASA !== null) renderOutraCasaForm();
+  preencherResumo('resumo-perfil', true);
+}
+
+async function mostrarResumoNoPainel() {
+  const el = $('resumo-painel');
+  if (!el) return;
+  let grupos = [];
+  try { grupos = await Firebase.resumoGeral(); } catch (e) { return; }
+  const conjuntos = grupos.reduce((t, g) => t + g.conjuntos.length, 0);
+  if (conjuntos <= 1 || !$('resumo-painel')) return; // com um conjunto só, o saldo abaixo já é o total
+  el.classList.add('card');
+  preencherResumo('resumo-painel', false);
+}
+
+/** Soma de todos os grupos: o que devo e o que tenho a receber, com o detalhe por grupo e conjunto. */
+async function preencherResumo(id, detalhado) {
+  const el = $(id);
+  if (!el) return;
+  let grupos;
+  try { grupos = await Firebase.resumoGeral(); } catch (err) { el.innerHTML = `<p class="empty">${h(err.message)}</p>`; return; }
+  if (!$(id)) return;
+  const aPagar = grupos.reduce((t, g) => t + g.aPagar, 0);
+  const aReceber = grupos.reduce((t, g) => t + g.aReceber, 0);
+  const vencido = grupos.reduce((t, g) => t + g.conjuntos.reduce((x, c) => x + Math.min(0, c.vencido), 0), 0);
+  const topo = `
+    <div class="stat-row" style="margin-top:0">
+      <div class="stat-tile"><div class="l">Você deve (todos os grupos)</div><div class="resumo-num status-critical">${fmtBRL(aPagar)}</div></div>
+      <div class="stat-tile"><div class="l">Tem a receber</div><div class="resumo-num status-good">${fmtBRL(aReceber)}</div></div>
+    </div>
+    ${vencido < -0.004 ? `<p class="hint warn">${fmtBRL(-vencido)} disso já venceu (meses até ${MESES_LONGOS[new Date().getMonth()].toLowerCase()}); o resto são parcelas futuras.</p>` : ''}`;
+  if (!detalhado) {
+    el.innerHTML = `<h3>Em todos os seus grupos</h3>${topo}
+      <button type="button" class="link-btn" data-tab="grupos">Ver detalhes no Perfil</button>`;
+    return;
+  }
+  el.innerHTML = `<h3>Somando todos os seus grupos</h3>${topo}
+    ${grupos.map(g => `
+      <div class="resumo-grupo">
+        <div class="list-row"><strong>${h(g.nome)}</strong>
+          ${g.atual ? '<span class="sub">aberto</span>' : `<button type="button" class="del-btn" data-action="trocarCasa" data-id="${h(g.id)}">Abrir</button>`}</div>
+        ${g.conjuntos.length ? g.conjuntos.map(c => `
+          <div class="list-row sub-row"><span>${h(c.conjunto)}</span>
+            <span class="${c.saldo < -0.004 ? 'status-critical' : c.saldo > 0.004 ? 'status-good' : 'status-neutral'}">${
+              c.saldo < -0.004 ? 'deve ' + fmtBRL(-c.saldo) : c.saldo > 0.004 ? 'recebe ' + fmtBRL(c.saldo) : 'quitado'}</span></div>`).join('')
+          : '<div class="list-row sub-row"><span class="sub">Nenhum conjunto seu aqui</span></div>'}
+      </div>`).join('')}
+    <p class="hint">Cada grupo acerta separado: o que você recebe num não abate o que deve em outro.</p>`;
 }
 
 // ---------- Várias casas ----------

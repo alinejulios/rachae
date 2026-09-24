@@ -381,3 +381,21 @@ body.on-login #toast { bottom: calc(24px + var(--safe-bottom)); }
 .acerto-item .list-row { border-bottom: none; }
 .acerto-valor { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .acerto-pix { margin-top: 6px; }
+
+/* ---------- Parcelas / atalhos ---------- */
+.parcelas-lista { margin: 8px 0 4px; border: 1px solid var(--card-border); border-radius: 12px; padding: 4px 12px; }
+.parcela-row { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--gridline); font-size: 14px; font-variant-numeric: tabular-nums; }
+.parcela-row:last-child { border-bottom: none; }
+.tag-st { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+.tag-st.ok { background: var(--good-tint); color: var(--good-text); }
+.tag-st.atraso { background: var(--critical-tint); color: var(--critical); }
+.tag-st.mes { background: var(--brand-blue-tint); color: var(--brand-blue-dark); }
+.tag-st.fut { background: var(--surface-2); color: var(--text-muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.chip { border: 1px solid var(--card-border); background: var(--brand-blue-tint); color: var(--brand-blue-dark); border-radius: 999px;
+  padding: 8px 12px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; min-height: 38px; }
+.resumo-num { font-family: var(--font-display); font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.resumo-grupo { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--gridline); }
+.resumo-grupo .list-row { border-bottom: none; padding: 6px 0; }
+.sub-row { padding-left: 12px !important; font-size: 14px; }
+.pendencias { margin-top: 12px; }
