@@ -3,7 +3,7 @@
 // Vocabulário: na tela, "grupo" = quem divide as contas (coleção `households`)
 // e "conjunto de despesas" = subdivisão dentro dele (coleção `grupos`). Os
 // nomes das coleções ficaram os da primeira versão para não migrar dados.
-// Despesas pessoais (privadas) ficam em households/{hid}/pessoais/{uid}/despesas.
+// Despesas pessoais (privadas) ficam em households/{hid}/pessoais/{uid}/despesas e .../compras.
 //
 // Mantém a mesma interface que o app usava com o Apps Script — api('dashboard'),
 // api('addDespesa', {payload}) etc. —, então as telas quase não mudaram. Os
@@ -284,13 +284,14 @@ function pararEscuta() { unsubs.forEach(f => f()); unsubs = []; }
 
 function escutarDados(hid) {
   pararEscuta();
-  DB = { membros: [], grupos: [], despesas: [], compras: [], pagamentos: [], pessoais: [] };
+  DB = { membros: [], grupos: [], despesas: [], compras: [], pagamentos: [], pessoais: [], pessoaisCompras: [] };
   const meuUid = usuarioAtual().uid;
   const caminhos = {
     membros: ['households', hid, 'membros'], grupos: ['households', hid, 'grupos'],
     despesas: ['households', hid, 'despesas'], compras: ['households', hid, 'compras'],
     pagamentos: ['households', hid, 'pagamentos'],
-    pessoais: ['households', hid, 'pessoais', meuUid, 'despesas']
+    pessoais: ['households', hid, 'pessoais', meuUid, 'despesas'],
+    pessoaisCompras: ['households', hid, 'pessoais', meuUid, 'compras']
   };
   const colecoes = Object.keys(caminhos);
   let pendentes = colecoes.length;
@@ -370,7 +371,7 @@ const ACOES = {
       .sort((a, b) => (b.todos - a.todos) || a.nome.localeCompare(b.nome, 'pt-BR'));
   },
   dashboard({ grupo }) {
-    if (grupo === PESSOAL) return montarDashboardPessoal(DB.pessoais);
+    if (grupo === PESSOAL) return montarDashboardPessoal(DB.pessoais, DB.pessoaisCompras);
     const u = usuarioAtual().uid;
     const g = DB.grupos.find(x => x.nome === grupo)
       || DB.grupos.find(x => membrosDoGrupo(x, DB.membros).has(u)) || DB.grupos[0];
@@ -382,7 +383,7 @@ const ACOES = {
     return ACOES.dashboard({ grupo }).comprasEmAberto;
   },
   historico({ grupo }) {
-    if (grupo === PESSOAL) return montarHistoricoPessoal(DB.pessoais);
+    if (grupo === PESSOAL) return montarHistoricoPessoal(DB.pessoais, DB.pessoaisCompras);
     const g = DB.grupos.find(x => x.nome === grupo);
     return montarHistorico(DB, g && g.id, usuarioAtual().uid, souDono());
   },
@@ -406,6 +407,15 @@ const ACOES = {
     return { ok: true, row: ref.id };
   },
   async addCompraParcelada({ payload }) {
+    if (payload.grupo === PESSOAL) {
+      if (!CASA.despesasPessoais) throw new ApiError('Despesas pessoais estão desligadas neste grupo.');
+      const ref = await addDoc(collection(fs, 'households', CASA.id, 'pessoais', usuarioAtual().uid, 'compras'), {
+        data: dataOk(payload.data), descricao: String(payload.descricao).trim().slice(0, 80),
+        categoria: payload.categoria, valor: centavos(payload.valorTotal),
+        nParcelas: Math.max(1, Math.min(60, parseInt(payload.nParcelas, 10) || 1)), criadoEm: serverTimestamp()
+      });
+      return { ok: true, id: 'pc:' + ref.id };
+    }
     const g = grupoPorNome(payload.grupo);
     const ref = await addDoc(collection(fs, 'households', CASA.id, 'compras'), {
       data: dataOk(payload.data), descricao: String(payload.descricao).trim().slice(0, 80),
@@ -424,8 +434,9 @@ const ACOES = {
     return { ok: true };
   },
   async apagar({ colecao, id }) {
-    if (colecao === 'pessoais') {
-      await deleteDoc(doc(fs, 'households', CASA.id, 'pessoais', usuarioAtual().uid, 'despesas', id));
+    if (colecao === 'pessoais' || colecao === 'pessoaisCompras') {
+      const sub = colecao === 'pessoais' ? 'despesas' : 'compras';
+      await deleteDoc(doc(fs, 'households', CASA.id, 'pessoais', usuarioAtual().uid, sub, id));
       return { ok: true };
     }
     if (!['despesas', 'compras', 'pagamentos'].includes(colecao)) throw new ApiError('Tipo inválido.');

@@ -17,7 +17,7 @@ rules_version = '2';
 //   households/{hid}/despesas/{id}
 //   households/{hid}/compras/{id}
 //   households/{hid}/pagamentos/{id}
-//   households/{hid}/pessoais/{uid}/despesas/{id} → despesas pessoais: SÓ a própria pessoa lê e grava
+//   households/{hid}/pessoais/{uid}/despesas|compras/{id} → pessoais: SÓ a própria pessoa lê e grava
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -176,6 +176,18 @@ service cloud.firestore {
           && str(request.resource.data.descricao, 1, 80)
           && str(request.resource.data.categoria, 1, 40)
           && centavos(request.resource.data.valor);
+        allow update: if false;
+      }
+      match /pessoais/{donoId}/compras/{id} {
+        allow read, delete: if isMember(hid) && uid() == donoId;
+        allow create: if isMember(hid) && uid() == donoId
+          && get(casa(hid)).data.get('despesasPessoais', false) == true
+          && request.resource.data.keys().hasOnly(['data', 'descricao', 'categoria', 'valor', 'nParcelas', 'criadoEm'])
+          && dataISO(request.resource.data.data)
+          && str(request.resource.data.descricao, 1, 80)
+          && str(request.resource.data.categoria, 1, 40)
+          && centavos(request.resource.data.valor)
+          && request.resource.data.nParcelas is int && request.resource.data.nParcelas >= 1 && request.resource.data.nParcelas <= 60;
         allow update: if false;
       }
 

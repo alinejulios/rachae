@@ -574,12 +574,12 @@ function renderDashboardPessoal(d) {
   $('tab-dashboard').innerHTML = `
     <div id="install-card"></div>
     <div class="card hero">
-      <div class="label">Seus gastos pessoais em ${MESES_LONGOS[new Date().getMonth()].toLowerCase()}</div>
+      <div class="label">Seus gastos pessoais em ${MESES_LONGOS[new Date().getMonth()].toLowerCase()} (com parcelas do mês)</div>
       <div class="value">${fmtBRL(d.totalMes)}</div>
       <div class="status status-neutral">🔒 Só você vê</div>
       <div class="stat-row">
         <div class="stat-tile"><div class="l">Lançamentos no mês</div><div class="v">${d.qtdMes}</div></div>
-        <div class="stat-tile"><div class="l">Total registrado</div><div class="v">${fmtBRL(d.totalGeral)}</div></div>
+        <div class="stat-tile"><div class="l">Parcelas a vencer</div><div class="v">${fmtBRL(d.parcelasFuturas)}</div></div>
       </div>
     </div>
     <div class="card">
@@ -814,7 +814,7 @@ function renderDespesaForm() {
 function renderCompraForm() {
   const el = $('tab-compra');
   const cfg = STATE.config;
-  if (!STATE.grupos.length) {
+  if (!STATE.grupos.length && !pessoaisLigadas()) {
     el.innerHTML = '<div class="card"><h3>Nova compra parcelada</h3><p class="empty">Nenhum conjunto de despesas ainda. Crie um na tela do grupo (ícone de pessoa, no topo).</p></div>';
     return;
   }
@@ -834,7 +834,8 @@ function renderCompraForm() {
       <label for="compra-categoria">Categoria</label>
       <select id="compra-categoria">${optionsHtml(cfg.categorias)}</select>
       <label for="compra-grupo">Conjunto de despesas</label>
-      <select id="compra-grupo" data-change="renderPessoasFields" data-prefix="compra">${optionsHtml(STATE.grupos.map(g => g.nome), grupoInicial())}</select>
+      <select id="compra-grupo" data-change="renderPessoasFields" data-prefix="compra">${optionsHtml(STATE.grupos.map(g => g.nome), noPessoal() ? null : grupoInicial())}${
+        pessoaisLigadas() ? `<option value="${PESSOAL}" ${noPessoal() ? 'selected' : ''}>Pessoal (só você)</option>` : ''}</select>
       <div id="compra-pessoas-fields"></div>
       <span class="field-label">Tags</span>
       <div id="compra-tags-editor"></div>
@@ -853,7 +854,9 @@ function renderPessoasFields(prefixOrEl) {
   if (seg) seg.closest('form').querySelector('label[for="' + prefix + '-segmento"]').classList.toggle('hidden', pessoal);
   if (seg) seg.classList.toggle('hidden', pessoal);
   if (pessoal) {
-    $(prefix + '-pessoas-fields').innerHTML = '<p class="hint">🔒 Despesa pessoal: só você vê e ela não entra na divisão do grupo.</p>';
+    $(prefix + '-pessoas-fields').innerHTML = (prefix === 'compra'
+      ? '<p class="hint">🔒 Compra pessoal: só você vê. Cada parcela entra no painel no mês em que vence, a partir do mês da compra.</p>'
+      : '<p class="hint">🔒 Despesa pessoal: só você vê e ela não entra na divisão do grupo.</p>');
     return;
   }
   const membros = grupoMembros($(prefix + '-grupo').value);
@@ -1016,6 +1019,28 @@ ACTIONS.submitDespesa = async form => {
   });
 };
 
+async function submitCompraPessoal(form) {
+  const valorTotal = parseMoney($('compra-valor').value);
+  const nParcelas = parseInt($('compra-nparc').value, 10);
+  const erro = !$('compra-descricao').value.trim() ? 'Preencha a descrição.'
+    : !(valorTotal > 0) ? 'Informe um valor maior que zero.'
+    : !(nParcelas >= 1 && nParcelas <= 60) ? 'Informe de 1 a 60 parcelas.' : null;
+  if (erro) { showToast(erro, true); vibrate(60); return; }
+  const payload = {
+    grupo: PESSOAL, data: $('compra-data').value || todayStr(), descricao: $('compra-descricao').value.trim(),
+    categoria: $('compra-categoria').value, valorTotal, nParcelas
+  };
+  const tags = (TAG_DRAFTS['compra-tags-editor'] || []).slice();
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      const res = await api('addCompraParcelada', { payload });
+      if (tags.length && res && res.id) saveTags('compra:' + res.id, tags);
+      vibrate(20);
+      showToast('Compra parcelada pessoal adicionada!');
+      renderCompraForm();
+    } catch (err) { onApiError(err); }
+  });
+}
 async function submitDespesaPessoal(form) {
   const valorTotal = parseMoney($('desp-valor').value);
   if (!$('desp-descricao').value.trim()) { showToast('Preencha a descrição.', true); vibrate(60); return; }
@@ -1043,6 +1068,7 @@ ACTIONS.updateParcelaPreview = () => {
   else updateDivisaoHint('compra');
 };
 ACTIONS.submitCompra = async form => {
+  if ($('compra-grupo').value === PESSOAL) { await submitCompraPessoal(form); return; }
   const metodo = $('compra-metodo').value;
   const participantes = getParticipantesSelecionados('compra');
   const valorTotal = parseMoney($('compra-valor').value);
@@ -1164,8 +1190,18 @@ function renderHistorico(data) {
           <div class="sub">${h(d.data)} · ${h(d.categoria)}</div>
           <div id="tags-desp-${h(d.row)}"></div>
           ${apagarBtn('pessoais', d.id, true)}
-        </div>`).join('') : '<p class="empty">Nenhuma despesa pessoal lançada ainda.</p>'}</div>`;
+        </div>`).join('') : '<p class="empty">Nenhuma despesa pessoal lançada ainda.</p>'}</div>
+      <div class="card"><h3>🔒 Parceladas pessoais</h3>
+      ${data.compras.length ? data.compras.map(c => `
+        <div class="hist-item">
+          <div class="top"><span>${h(c.descricao)}</span><span>${fmtBRL(c.valorTotal)}</span></div>
+          <div class="sub">${h(c.data)} · ${h(c.categoria)} · ${c.nParcelas}x de ${fmtBRL(c.valorParcela)} ·
+            ${c.parcelaAtual >= c.nParcelas ? 'quitada' : 'parcela ' + c.parcelaAtual + '/' + c.nParcelas + ' · faltam ' + fmtBRL(c.restante)}</div>
+          <div id="tags-compra-${h(c.row)}"></div>
+          ${apagarBtn('pessoaisCompras', c.id, true)}
+        </div>`).join('') : '<p class="empty">Nenhuma compra parcelada pessoal ainda.</p>'}</div>`;
     data.despesas.forEach(d => renderHistTags('tags-desp-' + d.row, 'desp:' + d.row));
+    data.compras.forEach(c => renderHistTags('tags-compra-' + c.row, 'compra:' + c.row));
     return;
   }
   const seg = (id, label) => `<button type="button" data-action="showHistSeg" data-seg="${id}" class="${HIST_SEG === id ? 'active' : ''}">${label}</button>`;

@@ -167,27 +167,64 @@ export function montarHistorico(db, grupoId, meUid, souDono) {
 
 // ------------------------------------------------------------------ despesas pessoais (privadas)
 // Não entram em saldos: são só para a pessoa acompanhar os próprios gastos.
-export function montarDashboardPessoal(despesas) {
+// Compras parceladas pessoais são distribuídas mês a mês (uma parcela por mês,
+// a partir do mês da compra), para o painel mostrar o gasto real de cada mês.
+
+const somaMeses = (mesISO, n) => {
+  const [a, m] = mesISO.split('-').map(Number);
+  const d = new Date(a, m - 1 + n, 1);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+};
+
+/** Parcelas de uma compra: [{ mes: 'aaaa-mm', valor: centavos, num }] — centavos que sobram vão nas primeiras. */
+export function parcelasDaCompra(compra) {
+  const n = Math.max(1, compra.nParcelas || 1);
+  const base = Math.floor(compra.valor / n);
+  let resto = compra.valor - base * n;
+  const mes0 = String(compra.data || '').slice(0, 7);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push({ mes: somaMeses(mes0, i), valor: base + (resto > 0 ? 1 : 0), num: i + 1 });
+    if (resto > 0) resto--;
+  }
+  return out;
+}
+
+function mesAtualISO() {
+  const hoje = new Date();
+  return hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
+}
+
+export function montarDashboardPessoal(despesas, compras = []) {
   const catTotals = {}, monthTotals = {}, catPorMesTotals = {};
-  despesas.forEach(d => {
-    catTotals[d.categoria] = (catTotals[d.categoria] || 0) + d.valor;
-    const mes = String(d.data || '').slice(0, 7);
+  const soma = (cat, mes, valor) => {
+    catTotals[cat] = (catTotals[cat] || 0) + valor;
     if (!mes) return;
-    monthTotals[mes] = (monthTotals[mes] || 0) + d.valor;
+    monthTotals[mes] = (monthTotals[mes] || 0) + valor;
     catPorMesTotals[mes] = catPorMesTotals[mes] || {};
-    catPorMesTotals[mes][d.categoria] = (catPorMesTotals[mes][d.categoria] || 0) + d.valor;
+    catPorMesTotals[mes][cat] = (catPorMesTotals[mes][cat] || 0) + valor;
+  };
+  const mesAtual = mesAtualISO();
+  let qtdMes = 0, parcelasFuturas = 0;
+  despesas.forEach(d => {
+    const mes = String(d.data || '').slice(0, 7);
+    soma(d.categoria, mes, d.valor);
+    if (mes === mesAtual) qtdMes++;
   });
+  compras.forEach(c => parcelasDaCompra(c).forEach(p => {
+    soma(c.categoria, p.mes, p.valor);
+    if (p.mes === mesAtual) qtdMes++;
+    if (p.mes > mesAtual) parcelasFuturas += p.valor;
+  }));
   const lista = obj => Object.keys(obj).map(cat => ({ categoria: cat, valor: reais(obj[cat]) })).sort((a, b) => b.valor - a.valor);
   const catPorMes = {};
   Object.keys(catPorMesTotals).forEach(m => { catPorMes[m] = lista(catPorMesTotals[m]); });
-  const hoje = new Date();
-  const mesAtual = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
   return {
     pessoalMode: true,
     grupoAtual: 'Pessoal',
     totalMes: reais(monthTotals[mesAtual] || 0),
-    totalGeral: reais(Object.values(monthTotals).reduce((s, v) => s + v, 0)),
-    qtdMes: despesas.filter(d => String(d.data || '').startsWith(mesAtual)).length,
+    parcelasFuturas: reais(parcelasFuturas),
+    qtdMes,
     pessoal: null, saldosPorPessoa: [], reembolsosPorPessoa: [], comprasEmAberto: [],
     gastosPorCategoria: lista(catTotals),
     evolucaoMensal: Object.keys(monthTotals).sort().map(mes => ({ mes, valor: reais(monthTotals[mes]) })),
@@ -195,13 +232,24 @@ export function montarDashboardPessoal(despesas) {
   };
 }
 
-export function montarHistoricoPessoal(despesas) {
+export function montarHistoricoPessoal(despesas, compras = []) {
+  const mesAtual = mesAtualISO();
   return {
     pessoalMode: true,
     despesas: despesas.slice().sort(porDataDesc).slice(0, 50).map(d => ({
-      row: 'p:' + d.id, id: d.id, colecao: 'pessoais', data: dataBR(d.data), descricao: d.descricao,
+      row: 'p:' + d.id, id: d.id, data: dataBR(d.data), descricao: d.descricao,
       categoria: d.categoria, valor: reais(d.valor), podeApagar: true
     })),
-    compras: [], pagamentos: []
+    compras: compras.slice().sort(porDataDesc).slice(0, 50).map(c => {
+      const parcelas = parcelasDaCompra(c);
+      const pagas = parcelas.filter(p => p.mes <= mesAtual).length;
+      return {
+        row: 'pc:' + c.id, id: c.id, data: dataBR(c.data), descricao: c.descricao, categoria: c.categoria,
+        valorTotal: reais(c.valor), nParcelas: parcelas.length, valorParcela: reais(parcelas[parcelas.length - 1].valor),
+        parcelaAtual: Math.min(pagas, parcelas.length),
+        restante: reais(parcelas.filter(p => p.mes > mesAtual).reduce((s, p) => s + p.valor, 0)), podeApagar: true
+      };
+    }),
+    pagamentos: []
   };
 }
