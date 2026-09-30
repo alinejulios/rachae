@@ -62,7 +62,8 @@ export function situacaoCompra(compra, membrosGrupo, pagamentos) {
  * Painel de um grupo para a pessoa logada — mesmo formato do getDashboard antigo.
  * @param {object} db { membros:[{uid,nome}], grupos:[{id,nome,tipo,todos,membros}], despesas, compras, pagamentos }
  */
-export function montarDashboard(db, meUid, grupoId) {
+export function montarDashboard(dbOriginal, meUid, grupoId) {
+  const { db, previstas } = comFixas(dbOriginal);
   const nome = u => (db.membros.find(m => m.uid === u) || {}).nome || 'Ex-morador(a)';
   const grupo = db.grupos.find(g => g.id === grupoId) || null;
   const membrosG = membrosDoGrupo(grupo, db.membros);
@@ -86,6 +87,9 @@ export function montarDashboard(db, meUid, grupoId) {
     const dev = devidoPorPessoa(d, membrosG);
     Object.keys(dev).forEach(u => { if (u in devidoAv) devidoAv[u] += dev[u]; });
   });
+
+  // Contas fixas previstas: só gráficos (barras claras), nunca saldos
+  previstas.filter(p => p.grupoId === grupoId).forEach(p => acumula(p.categoria, p.valor, p.data));
 
   const comprasGrupo = db.compras.filter(c => c.grupoId === grupoId);
   const comprasEmAberto = [];
@@ -220,7 +224,8 @@ const porDataDesc = (a, b) => (b.data + (b.criadoEm || '')).localeCompare(a.data
 export const codigoCompra = id => 'CP-' + String(id).slice(0, 5).toUpperCase();
 
 /** Histórico de um grupo — mesmo formato do getHistorico antigo (últimos 30 de cada). */
-export function montarHistorico(db, grupoId, meUid, souDono) {
+export function montarHistorico(dbOriginal, grupoId, meUid, souDono) {
+  const { db } = comFixas(dbOriginal);
   const nome = u => (db.membros.find(m => m.uid === u) || {}).nome || 'Ex-morador(a)';
   const grupo = db.grupos.find(g => g.id === grupoId);
   const membrosG = membrosDoGrupo(grupo, db.membros);
@@ -228,7 +233,9 @@ export function montarHistorico(db, grupoId, meUid, souDono) {
 
   const despesas = db.despesas.filter(d => d.grupoId === grupoId).sort(porDataDesc).slice(0, 30).map(d => ({
     row: d.id, id: d.id, acerto: !!d.acerto, data: dataBR(d.data), descricao: d.descricao, categoria: d.categoria, segmento: d.segmento,
-    grupo: grupo && grupo.nome, valor: reais(d.valor), pagoPor: nome(d.pagoPor), metodo: d.metodo, podeApagar: podeApagar(d)
+    grupo: grupo && grupo.nome, valor: reais(d.valor), pagoPor: nome(d.pagoPor), metodo: d.metodo, podeApagar: podeApagar(d),
+    valorFixo: d.valorFixo === true, automatica: !!d.automatica, serieId: d.serieId || null, mes: d.mes || null,
+    encerradaEm: d.fixoAte || null
   }));
   const comprasGrupo = db.compras.filter(c => c.grupoId === grupoId);
   const compras = comprasGrupo.slice().sort(porDataDesc).slice(0, 30).map(c => ({
@@ -255,6 +262,59 @@ const somaMeses = (mesISO, n) => {
   const d = new Date(a, m - 1 + n, 1);
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 };
+
+/** Segmento das contas do mês a mês (luz, internet…): só nele existe a opção "valor fixo". */
+export const ehMensal = segmento => String(segmento || '').trim().toLowerCase() === 'mensais';
+const chaveSerie = d => d.grupoId + '|' + String(d.descricao || '').trim().toLowerCase();
+const diasNoMes = mes => { const [a, m] = mes.split('-').map(Number); return new Date(a, m, 0).getDate(); };
+
+/** Valor de uma conta fixa num mês: a última mudança (`valores[].desde`) até aquele mês, senão o valor original. */
+export function valorNoMes(d, mes) {
+  let valor = d.valor, desde = '';
+  (d.valores || []).forEach(x => { if (x.desde <= mes && x.desde >= desde) { valor = x.valor; desde = x.desde; } });
+  return valor;
+}
+
+/**
+ * Contas fixas (despesa com `valorFixo`): repetem sozinhas todo mês, a partir do mês seguinte
+ * ao da despesa original, até `fixoAte` (encerrada) ou até outra conta fixa com a mesma
+ * descrição no mesmo conjunto começar. Nada é gravado: cada mês é calculado aqui.
+ *  - lancadas: meses até o atual — contam como despesa de verdade (saldos, histórico);
+ *  - previstas: próximos `horizonte` meses — só gráficos (barras claras).
+ * Mês que já tem lançamento real com a mesma descrição não repete (não conta em dobro).
+ */
+export function expandirFixas(despesas, mesAtual = mesAtualISO(), horizonte = 12) {
+  const mesesReais = {};
+  despesas.forEach(d => {
+    if (d.acerto) return;
+    const k = chaveSerie(d);
+    (mesesReais[k] = mesesReais[k] || new Set()).add(String(d.data).slice(0, 7));
+  });
+  const series = despesas.filter(d => d.valorFixo === true && !d.acerto).sort((a, b) => porDataDesc(b, a));
+  const limite = somaMeses(mesAtual, horizonte);
+  const lancadas = [], previstas = [];
+  series.forEach((d, i) => {
+    const k = chaveSerie(d);
+    const inicio = String(d.data).slice(0, 7);
+    let fim = limite;
+    if (d.fixoAte && d.fixoAte < fim) fim = d.fixoAte;
+    const proxima = series.slice(i + 1).find(x => chaveSerie(x) === k && String(x.data).slice(0, 7) > inicio);
+    if (proxima) { const antes = somaMeses(String(proxima.data).slice(0, 7), -1); if (antes < fim) fim = antes; }
+    const dia = Number(String(d.data).slice(8, 10)) || 1;
+    for (let mes = somaMeses(inicio, 1); mes <= fim; mes = somaMeses(mes, 1)) {
+      if (mesesReais[k].has(mes)) continue;
+      const oc = { ...d, id: d.id + '@' + mes, serieId: d.id, mes, automatica: true, valor: valorNoMes(d, mes),
+        data: mes + '-' + String(Math.min(dia, diasNoMes(mes))).padStart(2, '0') };
+      (mes <= mesAtual ? lancadas : previstas).push(oc);
+    }
+  });
+  return { lancadas, previstas };
+}
+/** db com os meses automáticos das contas fixas já somados às despesas. */
+function comFixas(db) {
+  const { lancadas, previstas } = expandirFixas(db.despesas || []);
+  return { db: { ...db, despesas: [...(db.despesas || []), ...lancadas] }, previstas };
+}
 
 /**
  * Parcelas de uma compra: [{ mes: 'aaaa-mm', valor: centavos, num }] — centavos que sobram vão nas primeiras.
@@ -376,12 +436,15 @@ export function minhasDespesas(grupos, meUid) {
     const conjuntos = Object.fromEntries((db.grupos || []).map(g => [g.id, g]));
     const membrosDe = g => membrosDoGrupo(g, db.membros || []);
     const base = { grupoId: id, grupoNome: nome };
-    (db.despesas || []).forEach(d => {
+    const { lancadas, previstas } = expandirFixas(db.despesas || []);
+    [...(db.despesas || []), ...lancadas, ...previstas].forEach(d => {
       if (d.acerto) return;
       const g = conjuntos[d.grupoId];
       const meu = devidoPorPessoa(d, membrosDe(g))[meUid] || 0;
       if (meu <= 0) return;
-      out.push({ ...base, conjunto: g ? g.nome : '—', tipo: 'Despesa', data: d.data, descricao: d.descricao,
+      const previsto = d.automatica && d.mes > mesAtualISO();
+      out.push({ ...base, conjunto: g ? g.nome : '—', data: d.data, descricao: d.descricao, previsto,
+        tipo: previsto ? 'Conta fixa (prevista)' : d.automatica ? 'Conta fixa (automática)' : 'Despesa',
         categoria: d.categoria, meuValor: reais(meu), total: reais(d.valor), meses: [{ mes: String(d.data).slice(0, 7), valor: reais(meu) }] });
     });
     (db.compras || []).forEach(c => {

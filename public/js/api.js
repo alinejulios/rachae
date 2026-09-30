@@ -20,7 +20,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from '../firebase-config.js';
 import { normalizarChave } from './pix.js';
-import { montarDashboard, montarHistorico, membrosDoGrupo, montarDashboardPessoal, montarHistoricoPessoal, minhasDespesas } from './calc.js';
+import { montarDashboard, montarHistorico, membrosDoGrupo, montarDashboardPessoal, montarHistoricoPessoal, minhasDespesas, ehMensal } from './calc.js';
 
 /** Valor especial do seletor de conjunto para o conjunto pessoal (privado). */
 export const PESSOAL = '__pessoal__';
@@ -419,6 +419,15 @@ function divisaoParaUids(payload) {
   });
   return out;
 }
+const mesHoje = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); };
+/** Conta fixa cuja repetição automática já gerou algum mês. */
+const jaRepetiu = d => d.valorFixo === true && String(d.data).slice(0, 7) < mesHoje();
+function contaFixaEditavel(id) {
+  const d = DB.despesas.find(x => x.id === id);
+  if (!d || d.valorFixo !== true) throw new ApiError('Conta fixa não encontrada.');
+  if (!souDono() && d.criadoPor !== usuarioAtual().uid) throw new ApiError('Só quem lançou (ou quem administra o grupo) pode mudar essa conta.');
+  return d;
+}
 function exigirCasa() {
   if (!CASA || !DB) throw new ApiError('Entre novamente.', 'AUTH');
 }
@@ -483,6 +492,7 @@ const ACOES = {
       categoria: payload.categoria, segmento: payload.segmento, grupoId: g.id,
       valor: centavos(payload.valorTotal), pagoPor: uidPorNome(payload.pagoPor), metodo: payload.metodo,
       participantes: payload.participantes.map(uidPorNome), divisao: divisaoParaUids(payload),
+      valorFixo: !!payload.valorFixo && ehMensal(payload.segmento),
       criadoPor: usuarioAtual().uid, criadoEm: serverTimestamp()
     });
     return { ok: true, row: ref.id };
@@ -552,7 +562,8 @@ const ACOES = {
       throw new ApiError('Este lançamento envolve alguém que saiu do grupo e não pode ser editado.');
     }
     const pct = x.metodo === 'Porcentagem';
-    return { ...out, grupo: g.nome, segmento: x.segmento, metodo: x.metodo, pagoPor: nomePorUid(pagador),
+    return { ...out, grupo: g.nome, segmento: x.segmento, metodo: x.metodo, pagoPor: nomePorUid(pagador), valorFixo: x.valorFixo === true,
+      jaRepetiu: jaRepetiu(x),
       participantes: (x.participantes || []).map(nomePorUid),
       divisao: x.divisao ? Object.fromEntries(Object.entries(x.divisao).map(([u, v]) => [nomePorUid(u), pct ? v * 100 : v / 100])) : null };
   },
@@ -582,8 +593,31 @@ const ACOES = {
       divisao: divisaoParaUids(payload), editadoPor: u };
     const campos = colecao === 'compras'
       ? { ...comum, comprador: uidPorNome(payload.comprador), nParcelas: nParcelas(), parcelaSeguinte: !!payload.parcelaSeguinte }
-      : { ...comum, segmento: payload.segmento, pagoPor: uidPorNome(payload.pagoPor) };
+      : { ...comum, segmento: payload.segmento, pagoPor: uidPorNome(payload.pagoPor),
+          // Conta fixa que já repetiu continua fixa (desmarcar apagaria os meses automáticos); para parar, "Encerrar"
+          valorFixo: jaRepetiu(atual) || (!!payload.valorFixo && ehMensal(payload.segmento)) };
     await updateDoc(doc(fs, 'households', CASA.id, colecao, id), campos);
+    return { ok: true };
+  },
+  // Conta fixa: novo valor a partir de `mes` (os meses anteriores continuam como estavam)
+  async mudarValorFixo({ id, mes, valor }) {
+    const d = contaFixaEditavel(id);
+    if (!/^\d{4}-\d{2}$/.test(mes || '')) throw new ApiError('Mês inválido.');
+    const valores = [...(d.valores || []).filter(x => x.desde !== mes), { desde: mes, valor: centavos(valor) }]
+      .sort((a, b) => a.desde.localeCompare(b.desde)).slice(-120);
+    await updateDoc(doc(fs, 'households', CASA.id, 'despesas', id),
+      { valores, editadoPor: usuarioAtual().uid, editadoEm: serverTimestamp() });
+    return { ok: true };
+  },
+  // Conta fixa: para de repetir a partir de `mes` (os meses anteriores ficam)
+  async encerrarFixa({ id, mes }) {
+    const d = contaFixaEditavel(id);
+    if (!/^\d{4}-\d{2}$/.test(mes || '') || mes <= String(d.data).slice(0, 7)) throw new ApiError('Mês inválido.');
+    const [a, m] = mes.split('-').map(Number);
+    const antes = new Date(a, m - 2, 1);
+    const fixoAte = antes.getFullYear() + '-' + String(antes.getMonth() + 1).padStart(2, '0');
+    await updateDoc(doc(fs, 'households', CASA.id, 'despesas', id),
+      { fixoAte, editadoPor: usuarioAtual().uid, editadoEm: serverTimestamp() });
     return { ok: true };
   },
   async salvarGrupo({ id, nome, tipo, membros }) {

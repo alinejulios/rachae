@@ -1,5 +1,6 @@
 import * as Firebase from './api.js';
 import { api, PESSOAL } from './api.js';
+import { ehMensal } from './calc.js';
 import { payloadPix, chaveLegivel, TIPOS_CHAVE, nomeParaQR } from './pix.js';
 import qrcode from '../vendor/qrcode.mjs';
 
@@ -740,7 +741,7 @@ function renderChartMensal() {
       ...baseChartOptions(),
       plugins: {
         legend: { display: temAnoAnterior, position: 'top', align: 'end', labels: { boxWidth: 12, font: { size: 12 }, color: cssVar('--text-secondary') } },
-        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + fmtBRL(c.raw) + (c.datasetIndex === 0 && futuro[c.dataIndex] ? ' (a vencer)' : '') } }
+        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + fmtBRL(c.raw) + (c.datasetIndex === 0 && futuro[c.dataIndex] ? ' (a vencer/previsto)' : '') } }
       },
       scales: {
         y: { grid: { color: cssVar('--gridline') }, border: { display: false }, ticks: { callback: fmtBRLCurto, color: cssVar('--text-muted'), maxTicksLimit: 5 } },
@@ -761,7 +762,7 @@ function renderChartMensal() {
     hintEl.className = 'hint';
     hintEl.textContent = 'Total ' + ano + periodoLabel + ': ' + fmtBRL(totalAtual);
   }
-  if (totalFuturo > 0) hintEl.textContent += ' · Barras claras: ' + fmtBRL(totalFuturo) + ' em parcelas a vencer.';
+  if (totalFuturo > 0) hintEl.textContent += ' · Barras claras: ' + fmtBRL(totalFuturo) + ' em parcelas a vencer e contas fixas dos próximos meses.';
 }
 
 function renderChartCategoriaMes() {
@@ -876,7 +877,19 @@ function renderDespesaForm() {
       <label for="desp-categoria">Categoria</label>
       <select id="desp-categoria">${optionsHtml(comAtual(cfg.categorias, ed && ed.categoria), ed && ed.categoria)}</select>
       <label for="desp-segmento">Segmento</label>
-      <select id="desp-segmento">${optionsHtml(comAtual(cfg.segmentos, ed && ed.segmento), ed && ed.segmento)}</select>
+      <select id="desp-segmento" data-change="atualizarValorFixo">${optionsHtml(comAtual(cfg.segmentos, ed && ed.segmento), ed && ed.segmento)}</select>
+      <div id="desp-fixo-box" class="hidden">
+        ${ed && ed.jaRepetiu ? `
+        <input type="checkbox" id="desp-fixo" class="hidden" checked>
+        <p class="hint">🔁 Conta fixa: repete sozinha todo mês. O valor aqui vale a partir deste mês (${h(ed.data.slice(5, 7) + '/' + ed.data.slice(0, 4))})
+          nos meses sem mudança de valor. Para mudar o valor ou encerrar a partir de outro mês, use os botões no Histórico, no mês desejado.</p>` : `
+        <label class="participa-item" style="margin-top:10px">
+          <input type="checkbox" id="desp-fixo" ${ed && ed.valorFixo ? 'checked' : ''}>
+          Valor fixo todo mês (lançar automaticamente)
+        </label>
+        <p class="hint">Marque se a conta é sempre igual (internet, condomínio…): ela é lançada sozinha todo mês, sem precisar adicionar de novo.
+          Se o valor mudar, use "Mudar valor" no Histórico, naquele mês. Deixe desmarcado se muda todo mês (luz, água, gás).</p>`}
+      </div>
       <label for="desp-grupo">Conjunto de despesas</label>
       <select id="desp-grupo" data-change="renderPessoasFields" data-prefix="desp">${grupoOpts}</select>
       <div id="desp-pessoas-fields"></div>
@@ -958,6 +971,7 @@ function renderPessoasFields(prefixOrEl) {
     seg.classList.toggle('hidden', esconder);
     seg.closest('form').querySelector('label[for="' + prefix + '-segmento"]').classList.toggle('hidden', esconder);
   }
+  if (prefix === 'desp') ACTIONS.atualizarValorFixo();
   if (pessoal) {
     $(prefix + '-pessoas-fields').innerHTML = (parcelado
       ? '<p class="hint">🔒 Compra pessoal: só você vê. Cada parcela entra no painel no mês em que vence, a partir do mês da compra.</p>'
@@ -996,6 +1010,13 @@ function renderPessoasFields(prefixOrEl) {
   renderDivisaoFields(prefix);
 }
 ACTIONS.renderPessoasFields = renderPessoasFields;
+// "Valor fixo" só aparece em despesa à vista do grupo com segmento Mensais
+ACTIONS.atualizarValorFixo = () => {
+  const box = $('desp-fixo-box');
+  if (!box) return;
+  const mostra = !DESP_PARCELADO && $('desp-grupo').value !== PESSOAL && ehMensal($('desp-segmento').value);
+  box.classList.toggle('hidden', !mostra);
+};
 
 function getParticipantesSelecionados(prefix) {
   return Array.from(document.querySelectorAll('.' + prefix + '-participa-input:checked')).map(i => i.dataset.nome);
@@ -1126,7 +1147,8 @@ function lerFormularioDespesa() {
   const comum = { ...base, metodo, participantes, divisao: metodo === 'Igual' ? null : collectDivisao('desp', metodo === 'Porcentagem') };
   return { payload: DESP_PARCELADO
     ? { ...comum, ...parcelas, comprador: $('desp-pagopor').value }
-    : { ...comum, segmento: $('desp-segmento').value, pagoPor: $('desp-pagopor').value } };
+    : { ...comum, segmento: $('desp-segmento').value, pagoPor: $('desp-pagopor').value,
+        valorFixo: ehMensal($('desp-segmento').value) && $('desp-fixo').checked } };
 }
 ACTIONS.submitDespesa = async form => {
   const { payload, erro } = lerFormularioDespesa();
@@ -1360,12 +1382,17 @@ function renderHistorico(data) {
     </div>
     ${card('despesas', data.despesas.length ? data.despesas.map(d => `
       <div class="hist-item">
-        <div class="top"><span>${d.acerto ? '💸 ' : ''}${h(d.descricao)}</span><span>${fmtBRL(d.valor)}</span></div>
+        <div class="top"><span>${d.acerto ? '💸 ' : d.valorFixo ? '🔁 ' : ''}${h(d.descricao)}</span><span>${fmtBRL(d.valor)}</span></div>
         <div class="sub">${d.acerto ? h(d.data) + ' · acerto de contas via Pix'
-          : `${h(d.data)} · ${h(d.categoria)}${d.segmento ? ' · ' + h(d.segmento) : ''} · pago por ${h(d.pagoPor)} · ${h(d.metodo)}`}</div>
+          : `${h(d.data)} · ${h(d.categoria)}${d.segmento ? ' · ' + h(d.segmento) : ''} · pago por ${h(d.pagoPor)} · ${h(d.metodo)}${
+            d.automatica ? ' · lançada automaticamente (conta fixa)' : d.valorFixo ? ' · conta fixa, repete todo mês' + (d.encerradaEm ? ' até ' + h(d.encerradaEm.slice(5) + '/' + d.encerradaEm.slice(0, 4)) : '') : ''}`}</div>
         <div id="tags-desp-${h(d.row)}"></div>
-        ${editarBtn('despesas', d.id, 'desp:' + d.row, d.podeApagar && !d.acerto)}
-        ${apagarBtn('despesas', d.id, d.podeApagar)}
+        ${d.automatica ? (d.podeApagar ? `
+          <button type="button" class="del-btn" style="margin-right:14px" data-action="mudarValorFixo" data-id="${h(d.serieId)}" data-mes="${h(d.mes)}" data-valor="${d.valor}">Mudar valor</button>
+          <button type="button" class="del-btn" data-action="encerrarFixa" data-id="${h(d.serieId)}" data-mes="${h(d.mes)}" data-desc="${h(d.descricao)}">Encerrar a partir daqui</button>` : '')
+        : `${editarBtn('despesas', d.id, 'desp:' + d.row, d.podeApagar && !d.acerto)}
+        ${d.valorFixo ? (d.podeApagar ? `<button type="button" class="del-btn" data-action="apagarItem" data-colecao="despesas" data-id="${h(d.id)}" data-fixa="1">Apagar</button>` : '')
+          : apagarBtn('despesas', d.id, d.podeApagar)}`}
       </div>`).join('') : '<p class="empty">Nenhuma despesa lançada ainda.</p>')}
     ${card('compras', data.compras.length ? data.compras.map(c => `
       <div class="hist-item">
@@ -1414,10 +1441,35 @@ function apagarBtn(colecao, id, pode) {
   return pode ? `<button type="button" class="del-btn" data-action="apagarItem" data-colecao="${colecao}" data-id="${h(id)}">Apagar</button>` : '';
 }
 ACTIONS.apagarItem = async el => {
-  if (!confirm('Apagar este lançamento? Os saldos de todos serão recalculados.')) return;
+  const msg = el.dataset.fixa
+    ? 'Esta é uma conta fixa: apagar remove ela E todos os meses lançados automaticamente depois dela.\n' +
+      'Para só parar de repetir daqui em diante, use "Encerrar a partir daqui" no mês desejado.\n\nApagar mesmo assim?'
+    : 'Apagar este lançamento? Os saldos de todos serão recalculados.';
+  if (!confirm(msg)) return;
   try {
     await api('apagar', { colecao: el.dataset.colecao, id: el.dataset.id });
     showToast('Apagado.');
+    loadHistorico();
+  } catch (err) { onApiError(err); }
+};
+const mesBR = mes => MESES_LONGOS[Number(mes.slice(5, 7)) - 1].toLowerCase() + '/' + mes.slice(0, 4);
+ACTIONS.mudarValorFixo = async el => {
+  const atual = Number(el.dataset.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const resp = prompt('Novo valor a partir de ' + mesBR(el.dataset.mes) + ' (os meses anteriores continuam como estão):', atual);
+  if (resp === null) return;
+  const valor = parseMoney(resp);
+  if (!(valor > 0)) { showToast('Informe um valor maior que zero.', true); return; }
+  try {
+    await api('mudarValorFixo', { id: el.dataset.id, mes: el.dataset.mes, valor });
+    showToast('Valor atualizado a partir de ' + mesBR(el.dataset.mes) + '.');
+    loadHistorico();
+  } catch (err) { onApiError(err); }
+};
+ACTIONS.encerrarFixa = async el => {
+  if (!confirm('Parar de lançar "' + el.dataset.desc + '" a partir de ' + mesBR(el.dataset.mes) + '? Os meses anteriores continuam no histórico.')) return;
+  try {
+    await api('encerrarFixa', { id: el.dataset.id, mes: el.dataset.mes });
+    showToast('Conta fixa encerrada.');
     loadHistorico();
   } catch (err) { onApiError(err); }
 };
@@ -2143,7 +2195,7 @@ function desenharMeusGastos() {
       <h3>Por mês em ${GASTOS.ano}</h3>
       <div class="chart-box" style="height:240px"><canvas id="chart-meus-gastos"></canvas></div>
       <p class="empty hidden" id="chart-meus-gastos-empty">Nenhum gasto seu em ${GASTOS.ano}.</p>
-      <p class="hint">Barras claras são parcelas que ainda vão vencer. Toque num mês para ver só ele.</p>
+      <p class="hint">Barras claras são parcelas a vencer e contas fixas previstas. Toque num mês para ver só ele.</p>
     </div>
 
     <div class="card">
