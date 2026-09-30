@@ -32,7 +32,8 @@ const K = {
   grupos: 'rachae_cache_grupos',
   tags: 'rachae_tags',
   installDismissed: 'rachae_install_dismissed',
-  parcelaSeguinte: 'rachae_parcela_seguinte'
+  parcelaSeguinte: 'rachae_parcela_seguinte',
+  gastosDetalhe: 'rachae_gastos_detalhe' // grupos que "Meus gastos" mostra por conjunto
 };
 
 // ---------- Utilidades ----------
@@ -1985,7 +1986,27 @@ ACTIONS.removerMembro = async el => {
 };
 
 // =================================================================== Meus gastos (todos os grupos)
-const GASTOS = { grupo: 'todos', ano: null, mes: 'todos', dados: null };
+const GASTOS = { grupo: 'todos', ano: null, mes: 'todos', dados: null, detalhe: null };
+// Tom mais escuro/claro da cor do grupo para cada conjunto (k de n)
+function tomDaCor(hex, k, n) {
+  if (n < 2 || !/^#[0-9a-f]{6}$/i.test(hex)) return hex;
+  const t = -0.35 + 0.7 * k / (n - 1); // negativo escurece, positivo clareia
+  const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))
+    .map(v => Math.round(t < 0 ? v * (1 + t) : v + (255 - v) * t));
+  return '#' + c.map(v => v.toString(16).padStart(2, '0')).join('');
+}
+/** Séries de "Meus gastos": o grupo inteiro, ou um por conjunto se o grupo estiver detalhado. */
+function seriesGastos(grupos, itens, corDe, comNomeDoGrupo) {
+  const out = [];
+  grupos.forEach(g => {
+    const doGrupo = itens.filter(i => i.grupoId === g.id);
+    if (!GASTOS.detalhe.has(g.id)) { out.push({ grupoId: g.id, nome: g.nome, cor: corDe(g.id), itens: doGrupo }); return; }
+    const conjuntos = [...new Set(doGrupo.map(i => i.conjunto))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    conjuntos.forEach((c, k) => out.push({ grupoId: g.id, conjunto: c, nome: (comNomeDoGrupo ? g.nome + ' · ' : '') + c,
+      cor: tomDaCor(corDe(g.id), k, conjuntos.length), itens: doGrupo.filter(i => i.conjunto === c) }));
+  });
+  return out;
+}
 async function renderMeusGastos() {
   const el = $('tab-gastos');
   if (!GASTOS.dados) el.innerHTML = '<div class="spinner">Juntando os gastos de todos os seus grupos...</div>';
@@ -1997,6 +2018,7 @@ async function renderMeusGastos() {
 function desenharMeusGastos() {
   const el = $('tab-gastos');
   const { grupos, itens } = GASTOS.dados;
+  if (!GASTOS.detalhe) GASTOS.detalhe = new Set(store.get(K.gastosDetalhe, []));
   const cores = categoriaCores(8);
   const corDe = id => cores[Math.max(0, grupos.findIndex(g => g.id === id)) % cores.length];
   if (GASTOS.grupo !== 'todos' && !grupos.some(g => g.id === GASTOS.grupo)) GASTOS.grupo = 'todos';
@@ -2013,8 +2035,19 @@ function desenharMeusGastos() {
   const noPeriodo = doGrupo.map(i => ({ ...i, valorPeriodo: i.meses.filter(m => m.mes.startsWith(prefixo)).reduce((t, m) => t + m.valor, 0) }))
     .filter(i => i.valorPeriodo > 0);
   const total = noPeriodo.reduce((t, i) => t + i.valorPeriodo, 0);
-  const porGrupo = grupos.map(g => ({ ...g, valor: noPeriodo.filter(i => i.grupoId === g.id).reduce((t, i) => t + i.valorPeriodo, 0) }))
+  const somaPeriodo = lista => lista.reduce((t, i) => t + i.valorPeriodo, 0);
+  const porGrupo = grupos.map(g => ({ ...g, valor: somaPeriodo(noPeriodo.filter(i => i.grupoId === g.id)) }))
     .filter(g => g.valor > 0).sort((a, b) => b.valor - a.valor);
+  const subsDe = g => seriesGastos([g], noPeriodo, corDe, false)
+    .map(sr => ({ ...sr, valor: somaPeriodo(sr.itens) })).filter(sr => sr.valor > 0).sort((a, b) => b.valor - a.valor);
+  const gruposVisiveis = GASTOS.grupo === 'todos' ? grupos : grupos.filter(g => g.id === GASTOS.grupo);
+  const linhaGasto = (cor, nome, valor, extra = '') => `
+        <div class="grupo-linha ${extra}">
+          <span class="cor" style="background:${cor}"></span>
+          <span class="nome">${h(nome)}</span>
+          <span class="pct">${total > 0 ? Math.round(valor / total * 100) : 0}%</span>
+          <span class="val">${fmtBRL(valor)}</span>
+        </div>`;
   const periodo = GASTOS.mes === 'todos' ? String(GASTOS.ano) : MESES_LONGOS[Number(GASTOS.mes) - 1].toLowerCase() + ' de ' + GASTOS.ano;
   const nomeFiltro = GASTOS.grupo === 'todos' ? 'todos os seus grupos' : (grupos.find(g => g.id === GASTOS.grupo) || {}).nome;
 
@@ -2043,6 +2076,14 @@ function desenharMeusGastos() {
         ${MESES_ABREV.map((m, i) => { const v = String(i + 1).padStart(2, '0'); return `<option value="${v}" ${v === GASTOS.mes ? 'selected' : ''}>${m}</option>`; }).join('')}
       </select>
     </div>
+    <div class="detalhe-gastos">
+      <span class="field-label">Ver por conjunto</span>
+      <div class="chips" role="group" aria-label="Grupos detalhados por conjunto">
+        ${gruposVisiveis.map(g => `<button type="button" class="chip toggle" data-action="detalharGastos" data-id="${h(g.id)}"
+          aria-pressed="${GASTOS.detalhe.has(g.id)}"><span class="cor" style="background:${corDe(g.id)}"></span>${h(g.nome)}</button>`).join('')}
+      </div>
+      <p class="hint">Marcado: o grupo aparece dividido nos conjuntos dele. Desmarcado: tudo junto.</p>
+    </div>
 
     <div class="card hero">
       <div class="label">Seus gastos em ${h(periodo)} · ${h(nomeFiltro)}</div>
@@ -2053,13 +2094,8 @@ function desenharMeusGastos() {
     ${porGrupo.length ? `
     <div class="card">
       <h3>Quanto em cada grupo</h3>
-      ${porGrupo.map(g => `
-        <div class="grupo-linha">
-          <span class="cor" style="background:${corDe(g.id)}"></span>
-          <span class="nome">${h(g.nome)}</span>
-          <span class="pct">${total > 0 ? Math.round(g.valor / total * 100) : 0}%</span>
-          <span class="val">${fmtBRL(g.valor)}</span>
-        </div>`).join('')}
+      ${porGrupo.map(g => linhaGasto(corDe(g.id), g.nome, g.valor) +
+        (GASTOS.detalhe.has(g.id) ? subsDe(g).map(sr => linhaGasto(sr.cor, sr.conjunto, sr.valor, 'sub')).join('') : '')).join('')}
     </div>` : ''}
 
     <div class="card">
@@ -2090,13 +2126,13 @@ function desenharGraficoMeusGastos(itens, grupos, corDe) {
   const ano = GASTOS.ano;
   const mostrar = GASTOS.grupo === 'todos' ? grupos : grupos.filter(g => g.id === GASTOS.grupo);
   const futuro = mesesFuturos(ano);
-  const datasets = mostrar.map(g => {
+  const datasets = seriesGastos(mostrar, itens, corDe, mostrar.length > 1).map(sr => {
     const data = MESES_ABREV.map((_, i) => {
       const mes = ano + '-' + String(i + 1).padStart(2, '0');
-      return itens.filter(x => x.grupoId === g.id).reduce((t, x) => t + x.meses.filter(m => m.mes === mes).reduce((s, m) => s + m.valor, 0), 0);
+      return sr.itens.reduce((t, x) => t + x.meses.filter(m => m.mes === mes).reduce((s, m) => s + m.valor, 0), 0);
     });
-    const cor = corDe(g.id);
-    return { label: g.nome, data, stack: 'gastos', borderRadius: 3, maxBarThickness: 22,
+    const cor = sr.cor;
+    return { label: sr.nome, data, stack: 'gastos', borderRadius: 3, maxBarThickness: 22,
       backgroundColor: futuro.map(f => (f ? corClara(cor) : cor)), borderColor: cor, borderWidth: futuro.map(f => (f ? 1.5 : 0)) };
   }).filter(ds => ds.data.some(v => v > 0));
   if (!toggleChartEmpty('chart-meus-gastos', 'chart-meus-gastos-empty', !datasets.length)) return;
@@ -2126,6 +2162,12 @@ function desenharGraficoMeusGastos(itens, grupos, corDe) {
     }
   });
 }
+ACTIONS.detalharGastos = el => {
+  const id = el.dataset.id;
+  if (GASTOS.detalhe.has(id)) GASTOS.detalhe.delete(id); else GASTOS.detalhe.add(id);
+  store.set(K.gastosDetalhe, [...GASTOS.detalhe]);
+  desenharMeusGastos();
+};
 ACTIONS.filtroGastos = el => {
   const campo = el.dataset.campo;
   GASTOS[campo] = campo === 'ano' ? Number(el.value) : el.value;
