@@ -402,6 +402,7 @@ body.on-login #toast { bottom: calc(24px + var(--safe-bottom)); }
 
 /* ---------- Meus gastos ---------- */
 .filtros { display: grid; grid-template-columns: 1.7fr 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.filtros.dois { grid-template-columns: 1fr 1fr; }
 .filtros select { font-size: 16px; padding: 9px 28px 9px 10px; min-height: 42px; }
 .grupo-linha { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--gridline); font-size: 14.5px; }
 .grupo-linha:last-child { border-bottom: none; }
@@ -409,7 +410,7 @@ body.on-login #toast { bottom: calc(24px + var(--safe-bottom)); }
 .grupo-linha.sub .nome { font-weight: 600; color: var(--text-secondary); }
 .grupo-linha.sub .cor { width: 9px; height: 9px; border-radius: 3px; }
 .detalhe-gastos { margin: -4px 0 14px; }
-.detalhe-gastos .chips { margin-top: 6px; }
+.detalhe-gastos .chips { margin: 6px 0 10px; }
 .chip.toggle { display: inline-flex; align-items: center; gap: 7px; background: var(--surface-1); color: var(--text-secondary); }
 .chip.toggle .cor { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
 .chip.toggle[aria-pressed="true"] { background: var(--brand-blue-tint); color: var(--brand-blue-dark); border-color: var(--brand-blue-dark); }

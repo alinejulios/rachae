@@ -33,7 +33,8 @@ const K = {
   tags: 'rachae_tags',
   installDismissed: 'rachae_install_dismissed',
   parcelaSeguinte: 'rachae_parcela_seguinte',
-  gastosDetalhe: 'rachae_gastos_detalhe' // grupos que "Meus gastos" mostra por conjunto
+  gastosDetalhe: 'rachae_gastos_detalhe', // grupos que "Meus gastos" mostra por conjunto
+  gastosOcultos: 'rachae_gastos_ocultos' // grupos escondidos em "Meus gastos"
 };
 
 // ---------- Utilidades ----------
@@ -103,7 +104,7 @@ document.addEventListener('submit', ev => {
   }
 });
 document.addEventListener('keydown', ev => {
-  if (ev.key !== 'Enter') return;
+  if (ev.key !== 'Enter' && ev.keyCode !== 13) return;
   const el = ev.target.closest('[data-enter]');
   if (el && ACTIONS[el.dataset.enter]) { ev.preventDefault(); ACTIONS[el.dataset.enter](el, ev); }
 });
@@ -400,7 +401,7 @@ function renderHistTags(containerId, key) {
   el.innerHTML = `<div class="tag-pills">
     ${getTags(key).map(t => tagPill(t, `data-action="removeHistTag" data-container="${h(containerId)}" data-key="${h(key)}" data-tag="${h(t)}"`)).join('')}
     <input type="text" class="tag-input" placeholder="+ tag" enterkeyhint="done" aria-label="Nova tag"
-           data-enter="addHistTag" data-container="${h(containerId)}" data-key="${h(key)}">
+           data-enter="addHistTag" data-change="addHistTag" data-container="${h(containerId)}" data-key="${h(key)}">
   </div>`;
 }
 ACTIONS.addHistTag = el => {
@@ -423,11 +424,12 @@ function renderTagEditor(containerId) {
   el.innerHTML = `<div class="tag-pills">
     ${tags.map(t => tagPill(t, `data-action="removeDraftTag" data-container="${h(containerId)}" data-tag="${h(t)}"`)).join('')}
     <input type="text" class="tag-input" placeholder="+ tag" enterkeyhint="done" aria-label="Nova tag"
-           data-enter="addDraftTag" data-container="${h(containerId)}">
+           data-enter="addDraftTag" data-change="addDraftTag" data-container="${h(containerId)}">
   </div>
   <p class="tags-hint">Tags ficam só neste aparelho — não vão para a planilha.</p>`;
 }
-ACTIONS.addDraftTag = el => {
+// Enter ou sair do campo (evento change) confirmam a tag
+ACTIONS.addDraftTag = (el, ev) => {
   const tag = normalizeTag(el.value);
   if (!tag) return;
   const id = el.dataset.container;
@@ -435,8 +437,13 @@ ACTIONS.addDraftTag = el => {
   if (TAG_DRAFTS[id].indexOf(tag) === -1) TAG_DRAFTS[id].push(tag);
   renderTagEditor(id);
   const input = $(id).querySelector('.tag-input');
-  if (input) input.focus();
+  if (input && ev && ev.type === 'keydown') input.focus(); // no Enter, continua digitando tags
 };
+/** Tag digitada e não confirmada (sem Enter) também vale ao enviar o formulário. */
+function confirmarTagPendente(containerId) {
+  const input = $(containerId) && $(containerId).querySelector('.tag-input');
+  if (input && input.value.trim()) ACTIONS.addDraftTag(input);
+}
 ACTIONS.removeDraftTag = el => {
   const id = el.dataset.container;
   TAG_DRAFTS[id] = (TAG_DRAFTS[id] || []).filter(t => t !== el.dataset.tag);
@@ -1125,6 +1132,7 @@ ACTIONS.submitDespesa = async form => {
   const { payload, erro } = lerFormularioDespesa();
   if (erro) { showToast(erro, true); vibrate(60); return; }
   const pessoal = payload.grupo === PESSOAL;
+  confirmarTagPendente('desp-tags-editor');
   const tags = (TAG_DRAFTS['desp-tags-editor'] || []).slice();
   if (EDITANDO) {
     const { colecao, id, tagKey } = EDITANDO;
@@ -2013,7 +2021,7 @@ ACTIONS.removerMembro = async el => {
 };
 
 // =================================================================== Meus gastos (todos os grupos)
-const GASTOS = { grupo: 'todos', ano: null, mes: 'todos', dados: null, detalhe: null };
+const GASTOS = { ano: null, mes: 'todos', dados: null, detalhe: null, ocultos: null };
 // Tom mais escuro/claro da cor do grupo para cada conjunto (k de n)
 function tomDaCor(hex, k, n) {
   if (n < 2 || !/^#[0-9a-f]{6}$/i.test(hex)) return hex;
@@ -2046,9 +2054,13 @@ function desenharMeusGastos() {
   const el = $('tab-gastos');
   const { grupos, itens } = GASTOS.dados;
   if (!GASTOS.detalhe) GASTOS.detalhe = new Set(store.get(K.gastosDetalhe, []));
+  if (!GASTOS.ocultos) GASTOS.ocultos = new Set(store.get(K.gastosOcultos, []));
   const cores = categoriaCores(8);
   const corDe = id => cores[Math.max(0, grupos.findIndex(g => g.id === id)) % cores.length];
-  if (GASTOS.grupo !== 'todos' && !grupos.some(g => g.id === GASTOS.grupo)) GASTOS.grupo = 'todos';
+  const visiveis = grupos.filter(g => !GASTOS.ocultos.has(g.id));
+  // "Por conjunto" só faz sentido em grupo com mais de um conjunto
+  const conjuntosDe = id => new Set(itens.filter(i => i.grupoId === id).map(i => i.conjunto));
+  const detalhaveis = visiveis.filter(g => conjuntosDe(g.id).size > 1);
 
   // Anos com gastos (sempre inclui o atual)
   const anos = new Set([anoAtual()]);
@@ -2058,7 +2070,7 @@ function desenharMeusGastos() {
   const prefixo = GASTOS.mes === 'todos' ? GASTOS.ano + '-' : GASTOS.ano + '-' + GASTOS.mes;
 
   // Quanto de cada gasto cai no período escolhido (parcelas pessoais podem cair em vários meses)
-  const doGrupo = itens.filter(i => GASTOS.grupo === 'todos' || i.grupoId === GASTOS.grupo);
+  const doGrupo = itens.filter(i => !GASTOS.ocultos.has(i.grupoId));
   const noPeriodo = doGrupo.map(i => ({ ...i, valorPeriodo: i.meses.filter(m => m.mes.startsWith(prefixo)).reduce((t, m) => t + m.valor, 0) }))
     .filter(i => i.valorPeriodo > 0);
   const total = noPeriodo.reduce((t, i) => t + i.valorPeriodo, 0);
@@ -2067,7 +2079,6 @@ function desenharMeusGastos() {
     .filter(g => g.valor > 0).sort((a, b) => b.valor - a.valor);
   const subsDe = g => seriesGastos([g], noPeriodo, corDe, false)
     .map(sr => ({ ...sr, valor: somaPeriodo(sr.itens) })).filter(sr => sr.valor > 0).sort((a, b) => b.valor - a.valor);
-  const gruposVisiveis = GASTOS.grupo === 'todos' ? grupos : grupos.filter(g => g.id === GASTOS.grupo);
   const linhaGasto = (cor, nome, valor, extra = '') => `
         <div class="grupo-linha ${extra}">
           <span class="cor" style="background:${cor}"></span>
@@ -2076,7 +2087,8 @@ function desenharMeusGastos() {
           <span class="val">${fmtBRL(valor)}</span>
         </div>`;
   const periodo = GASTOS.mes === 'todos' ? String(GASTOS.ano) : MESES_LONGOS[Number(GASTOS.mes) - 1].toLowerCase() + ' de ' + GASTOS.ano;
-  const nomeFiltro = GASTOS.grupo === 'todos' ? 'todos os seus grupos' : (grupos.find(g => g.id === GASTOS.grupo) || {}).nome;
+  const nomeFiltro = visiveis.length === grupos.length ? 'todos os seus grupos'
+    : visiveis.length ? visiveis.map(g => g.nome).join(', ') : 'nenhum grupo';
 
   // Lista agrupada por mês
   const porMes = {};
@@ -2090,11 +2102,7 @@ function desenharMeusGastos() {
   el.innerHTML = `
     <h2 class="page-title">Meus gastos</h2>
     <p class="page-sub">A sua parte em cada despesa, somando todos os grupos e as despesas pessoais. Acertos de contas não entram.</p>
-    <div class="filtros">
-      <select data-change="filtroGastos" data-campo="grupo" aria-label="Grupo">
-        <option value="todos">Todos os grupos</option>
-        ${grupos.map(g => `<option value="${h(g.id)}" ${g.id === GASTOS.grupo ? 'selected' : ''}>${h(g.nome)}</option>`).join('')}
-      </select>
+    <div class="filtros dois">
       <select data-change="filtroGastos" data-campo="ano" aria-label="Ano">
         ${listaAnos.map(a => `<option value="${a}" ${a === GASTOS.ano ? 'selected' : ''}>${a}</option>`).join('')}
       </select>
@@ -2104,12 +2112,18 @@ function desenharMeusGastos() {
       </select>
     </div>
     <div class="detalhe-gastos">
+      <span class="field-label">Grupos</span>
+      <div class="chips" role="group" aria-label="Grupos mostrados">
+        ${grupos.map(g => `<button type="button" class="chip toggle" data-action="mostrarGrupoGastos" data-id="${h(g.id)}"
+          aria-pressed="${!GASTOS.ocultos.has(g.id)}"><span class="cor" style="background:${corDe(g.id)}"></span>${h(g.nome)}</button>`).join('')}
+      </div>
+      ${detalhaveis.length ? `
       <span class="field-label">Ver por conjunto</span>
       <div class="chips" role="group" aria-label="Grupos detalhados por conjunto">
-        ${gruposVisiveis.map(g => `<button type="button" class="chip toggle" data-action="detalharGastos" data-id="${h(g.id)}"
+        ${detalhaveis.map(g => `<button type="button" class="chip toggle" data-action="detalharGastos" data-id="${h(g.id)}"
           aria-pressed="${GASTOS.detalhe.has(g.id)}"><span class="cor" style="background:${corDe(g.id)}"></span>${h(g.nome)}</button>`).join('')}
       </div>
-      <p class="hint">Marcado: o grupo aparece dividido nos conjuntos dele. Desmarcado: tudo junto.</p>
+      <p class="hint">Marcado: o grupo aparece dividido nos conjuntos dele. Desmarcado: tudo junto.</p>` : ''}
     </div>
 
     <div class="card hero">
@@ -2145,13 +2159,13 @@ function desenharMeusGastos() {
       : '<p class="empty">Nenhum gasto neste período.</p>'}
     </div>
   `;
-  desenharGraficoMeusGastos(doGrupo, grupos, corDe);
+  desenharGraficoMeusGastos(doGrupo, visiveis, corDe);
 }
 function desenharGraficoMeusGastos(itens, grupos, corDe) {
   destroyChart('meusGastos');
   if (!chartsReady()) return;
   const ano = GASTOS.ano;
-  const mostrar = GASTOS.grupo === 'todos' ? grupos : grupos.filter(g => g.id === GASTOS.grupo);
+  const mostrar = grupos;
   const futuro = mesesFuturos(ano);
   const datasets = seriesGastos(mostrar, itens, corDe, mostrar.length > 1).map(sr => {
     const data = MESES_ABREV.map((_, i) => {
@@ -2193,6 +2207,12 @@ ACTIONS.detalharGastos = el => {
   const id = el.dataset.id;
   if (GASTOS.detalhe.has(id)) GASTOS.detalhe.delete(id); else GASTOS.detalhe.add(id);
   store.set(K.gastosDetalhe, [...GASTOS.detalhe]);
+  desenharMeusGastos();
+};
+ACTIONS.mostrarGrupoGastos = el => {
+  const id = el.dataset.id;
+  if (GASTOS.ocultos.has(id)) GASTOS.ocultos.delete(id); else GASTOS.ocultos.add(id);
+  store.set(K.gastosOcultos, [...GASTOS.ocultos]);
   desenharMeusGastos();
 };
 ACTIONS.filtroGastos = el => {
