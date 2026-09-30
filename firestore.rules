@@ -267,10 +267,15 @@ service cloud.firestore {
       // -------------------------------------------------------------- pagamentos de parcela
       match /pagamentos/{id} {
         allow read: if isMember(hid);
-        // Só dá para registrar pagamento em nome próprio
+        // Pagamento em nome próprio — ou, para quem administra, em nome de outra pessoa do
+        // grupo (fica marcado quem registrou em `registradoPor`)
         allow create: if isMember(hid)
-          && request.resource.data.keys().hasOnly(['data', 'compraId', 'pessoa', 'valor', 'criadoEm'])
-          && request.resource.data.pessoa == uid()
+          && request.resource.data.keys().hasOnly(['data', 'compraId', 'pessoa', 'valor', 'registradoPor', 'criadoEm'])
+          && (
+            (request.resource.data.pessoa == uid() && !('registradoPor' in request.resource.data))
+            || (isOwner(hid) && request.resource.data.get('registradoPor', null) == uid()
+                && memberExists(hid, request.resource.data.pessoa))
+          )
           && dataISO(request.resource.data.data)
           && exists(/databases/$(database)/documents/households/$(hid)/compras/$(request.resource.data.compraId))
           && centavos(request.resource.data.valor);

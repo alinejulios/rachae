@@ -1173,11 +1173,16 @@ ACTIONS.updateParcelaPreview = () => {
 };
 
 // =================================================================== Pagamento de parcela
+// Quem administra pode registrar o pagamento de outra pessoa (null = a própria pessoa)
+let PAG_PESSOA = null;
+function pagandoPorOutra() { return !!PAG_PESSOA && PAG_PESSOA !== STATE.pessoa; }
+function podePagarPorOutra() { return Firebase.souDono() && !noPessoal(); }
 async function renderPagamentoForm() {
   const el = $('tab-pagamento');
+  if (!podePagarPorOutra() || !grupoMembros(STATE.grupoAtual).includes(PAG_PESSOA)) PAG_PESSOA = null;
   el.innerHTML = '<div class="spinner">Carregando compras em aberto...</div>';
   try {
-    const compras = await api('comprasParaPagamento', { grupo: STATE.grupoAtual });
+    const compras = await api('comprasParaPagamento', { grupo: STATE.grupoAtual, pessoa: PAG_PESSOA });
     if (STATE.currentTab !== 'pagamento') return;
     renderPagamentoFormBody(compras);
   } catch (err) {
@@ -1190,15 +1195,23 @@ let COMPRAS_ABERTAS = [];
 function renderPagamentoFormBody(compras) {
   COMPRAS_ABERTAS = compras;
   const el = $('tab-pagamento');
+  const porOutra = pagandoPorOutra();
+  const seletor = podePagarPorOutra() ? `
+      <label for="pag-pessoa">Quem pagou</label>
+      <select id="pag-pessoa" data-change="trocarPessoaPagamento">${optionsHtml(grupoMembros(STATE.grupoAtual), PAG_PESSOA || STATE.pessoa)}</select>
+      <p class="hint">Como administrador(a), você pode registrar o pagamento de outra pessoa.</p>` : '';
   if (!compras.length) {
     el.innerHTML = noPessoal()
       ? '<div class="card"><h3>Registrar pagamento</h3><p class="empty">O conjunto pessoal não tem parcelas a pagar. Escolha um conjunto compartilhado no topo.</p></div>'
-      : '<div class="card"><h3>Registrar pagamento</h3><p class="empty">Você não tem nenhuma parcela em aberto neste conjunto 🎉</p></div>';
+      : `<div class="card"><h3>Registrar pagamento</h3>${seletor}<p class="empty">${porOutra
+        ? h(PAG_PESSOA) + ' não tem nenhuma parcela em aberto neste conjunto.'
+        : 'Você não tem nenhuma parcela em aberto neste conjunto 🎉'}</p></div>`;
     return;
   }
   el.innerHTML = `
     <form class="card" data-submit="submitPagamento" novalidate autocomplete="off">
       <h3>Registrar pagamento de parcela</h3>
+      ${seletor}
       <label for="pag-compra">Compra</label>
       <select id="pag-compra" data-change="trocarCompraPagamento">
         ${compras.map((c, i) => `<option value="${h(c.id)}" data-i="${i}" data-saldo="${c.saldoDevedor}">${h(c.descricao)} — ${fmtBRL(c.saldoDevedor)}</option>`).join('')}
@@ -1209,15 +1222,21 @@ function renderPagamentoFormBody(compras) {
       ${moneyInput('pag-valor', 'data-input="atualizarPixParcela"')}
       <div class="chips" id="pag-atalhos"></div>
       <p class="hint">O pagamento abate da parcela mais antiga para a mais nova — pagar a mais adianta as próximas.</p>
-      <span class="field-label">Pagar com Pix</span>
-      <div id="pag-pix"></div>
+      <div class="${porOutra ? 'hidden' : ''}">
+        <span class="field-label">Pagar com Pix</span>
+        <div id="pag-pix"></div>
+      </div>
       <label for="pag-data">Data do pagamento</label>
       <input type="date" id="pag-data" value="${todayStr()}">
-      <button class="primary" type="submit">Registrar pagamento</button>
+      <button class="primary" type="submit">${porOutra ? 'Registrar pagamento de ' + h(PAG_PESSOA) : 'Registrar pagamento'}</button>
     </form>
   `;
   ACTIONS.updateSaldoDevedorHint();
 }
+ACTIONS.trocarPessoaPagamento = el => {
+  PAG_PESSOA = el.value === STATE.pessoa ? null : el.value;
+  renderPagamentoForm();
+};
 function saldoSelecionado() {
   const sel = $('pag-compra');
   return Number(sel.options[sel.selectedIndex].dataset.saldo) || 0;
@@ -1225,7 +1244,7 @@ function saldoSelecionado() {
 function compraSelecionada() { return COMPRAS_ABERTAS[Number($('pag-compra').selectedOptions[0].dataset.i)]; }
 ACTIONS.updateSaldoDevedorHint = () => {
   const c = compraSelecionada();
-  $('pag-saldo-hint').textContent = 'Você deve ' + fmtBRL(saldoSelecionado()) + ' para ' + (c ? c.compradorNome : 'quem comprou') + ' nesta compra.';
+  $('pag-saldo-hint').textContent = (pagandoPorOutra() ? PAG_PESSOA + ' deve ' : 'Você deve ') + fmtBRL(saldoSelecionado()) + ' para ' + (c ? c.compradorNome : 'quem comprou') + ' nesta compra.';
   const mesAtual = mesAtualKey();
   const parcelas = (c && c.parcelas) || [];
   $('pag-parcelas').innerHTML = parcelas.length ? `<div class="parcelas-lista">${parcelas.map(p => {
@@ -1269,6 +1288,10 @@ ACTIONS.submitPagamento = async form => {
   if (!(valor > 0)) { showToast('Informe o valor pago.', true); vibrate(60); return; }
   if (valor > saldoSelecionado() + 0.01 && !confirm('O valor é maior que o saldo devedor. Registrar mesmo assim?')) return;
   const payload = { compraId: $('pag-compra').value, data: $('pag-data').value || todayStr(), valor };
+  if (pagandoPorOutra()) {
+    payload.pessoa = PAG_PESSOA;
+    if (!confirm('Registrar pagamento de ' + fmtBRL(valor) + ' feito por ' + PAG_PESSOA + '?')) return;
+  }
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
       await api('addPagamento', { payload });
@@ -1347,7 +1370,7 @@ function renderHistorico(data) {
     ${card('pagamentos', data.pagamentos.length ? data.pagamentos.map(p => `
       <div class="hist-item">
         <div class="top"><span>${h(p.pessoa)} · ${h(p.descricao || p.compraId)}</span><span>${fmtBRL(p.valor)}</span></div>
-        <div class="sub">${h(p.data)} · compra ${h(p.compraId)}</div>
+        <div class="sub">${h(p.data)} · compra ${h(p.compraId)}${p.registradoPor ? ' · registrado por ' + h(p.registradoPor) : ''}</div>
         ${apagarBtn('pagamentos', p.id, p.podeApagar)}
       </div>`).join('') : '<p class="empty">Nenhum pagamento registrado ainda.</p>')}
   `;
@@ -1544,6 +1567,8 @@ function acertosHtml(d) {
           <div>${texto}</div>
           <div class="acerto-valor">${fmtBRL(a.valor)}</div>
         </div>
+        ${!souEuQuemPaga && Firebase.souDono() && a.de !== eu
+          ? `<button type="button" class="link-btn" data-action="registrarAcerto" data-i="${i}">Registrar que ${h(a.deNome)} pagou</button>` : ''}
         ${souEuQuemPaga ? (ACERTO_ABERTO === chave ? `
           <div class="acerto-pix">
             ${pixPainelHtml({ pix: a.pix, valor: a.valor, paraNome: a.paraNome })}
@@ -1619,10 +1644,12 @@ ACTIONS.registrarAcerto = async el => {
   const quando = ACERTO_MES === 'tudo'
     ? (partes && partes.length > 1 ? ' (quitando ' + partes.map(x => labelMes(x.mesRef).split(' de ')[0].toLowerCase()).join(', ') + ')' : '')
     : ' referente a ' + labelMes(mesRef).toLowerCase();
-  if (!a || !confirm('Confirmar que você pagou ' + fmtBRL(a.valor) + ' para ' + a.paraNome + quando + '? Isso abate o saldo total e o do mês.')) return;
+  const porOutra = a && a.de !== Firebase.usuarioAtual().uid;
+  if (!a || !confirm('Confirmar que ' + (porOutra ? a.deNome + ' pagou ' : 'você pagou ') + fmtBRL(a.valor) + ' para ' + a.paraNome + quando +
+    '? Isso abate o saldo total e o do mês.')) return;
   await withBusy(el, async () => {
     try {
-      await api('registrarAcerto', { para: a.para, valor: a.valor, grupo: STATE.grupoAtual, mesRef, partes });
+      await api('registrarAcerto', { de: a.de, para: a.para, valor: a.valor, grupo: STATE.grupoAtual, mesRef, partes });
       ACERTO_ABERTO = null;
       vibrate(20);
       showToast('Pagamento registrado! Saldos atualizados.');

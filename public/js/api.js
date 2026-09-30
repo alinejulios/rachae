@@ -453,8 +453,15 @@ const ACOES = {
     d.grupos = DB.grupos.map(x => ({ nome: x.nome, tipo: x.tipo }));
     return d;
   },
-  comprasParaPagamento({ grupo }) {
-    return ACOES.dashboard({ grupo }).comprasEmAberto;
+  // `pessoa` (nome): quem administra pode ver as parcelas em aberto de outra pessoa, para registrar por ela
+  comprasParaPagamento({ grupo, pessoa }) {
+    const u = usuarioAtual().uid;
+    const alvo = pessoa ? uidPorNome(pessoa) : u;
+    if (alvo === u) return ACOES.dashboard({ grupo }).comprasEmAberto;
+    if (!souDono()) throw new ApiError('Só quem administra o grupo registra pagamento por outra pessoa.');
+    if (grupo === PESSOAL) return [];
+    const g = DB.grupos.find(x => x.nome === grupo);
+    return comPix({ ...montarDashboard(DB, alvo, g && g.id), acertos: [], meses: {} }).comprasEmAberto;
   },
   historico({ grupo }) {
     if (grupo === PESSOAL) return montarHistoricoPessoal(DB.pessoais, DB.pessoaisCompras);
@@ -502,9 +509,13 @@ const ACOES = {
     return { ok: true, id: 'CP-' + ref.id.slice(0, 5).toUpperCase() };
   },
   async addPagamento({ payload }) {
+    const u = usuarioAtual().uid;
+    const pessoa = payload.pessoa ? uidPorNome(payload.pessoa) : u;
+    const porOutra = pessoa !== u;
+    if (porOutra && !souDono()) throw new ApiError('Só quem administra o grupo registra pagamento por outra pessoa.');
     await addDoc(collection(fs, 'households', CASA.id, 'pagamentos'), {
-      data: dataOk(payload.data), compraId: payload.compraId, pessoa: usuarioAtual().uid,
-      valor: centavos(payload.valor), criadoEm: serverTimestamp()
+      data: dataOk(payload.data), compraId: payload.compraId, pessoa,
+      valor: centavos(payload.valor), ...(porOutra ? { registradoPor: u } : {}), criadoEm: serverTimestamp()
     });
     return { ok: true };
   },
@@ -653,18 +664,21 @@ const ACOES = {
    * Registra que eu paguei alguém (acerto de contas). `partes` divide o valor entre meses de
    * referência (ex.: quitar agosto e setembro de uma vez); sem `partes`, vai tudo em `mesRef`.
    */
-  async registrarAcerto({ para, valor, grupo, mesRef, partes }) {
+  // `de` (uid): quem administra pode registrar um acerto feito entre outras pessoas
+  async registrarAcerto({ de, para, valor, grupo, mesRef, partes }) {
     const g = grupoPorNome(grupo);
     const u = usuarioAtual().uid;
-    if (para === u) throw new ApiError('Não dá para acertar contas consigo mesma(o).');
-    if (!DB.membros.some(m => m.uid === para)) throw new ApiError('Essa pessoa não está mais no grupo.');
+    const pagador = de || u;
+    if (pagador !== u && !souDono()) throw new ApiError('Só quem administra o grupo registra acerto por outra pessoa.');
+    if (para === pagador) throw new ApiError('Não dá para acertar contas consigo mesma(o).');
+    if (![pagador, para].every(x => DB.membros.some(m => m.uid === x))) throw new ApiError('Essa pessoa não está mais no grupo.');
     const mesOk = m => (/^\d{4}-\d{2}$/.test(m || '') ? m : new Date().toISOString().slice(0, 7));
     const lista = (partes && partes.length ? partes : [{ mesRef, valor }]).filter(p => Number(p.valor) > 0);
     const b = writeBatch(fs);
     lista.forEach(p => b.set(doc(collection(fs, 'households', CASA.id, 'despesas')), {
       data: new Date().toISOString().slice(0, 10),
-      descricao: ('Acerto: ' + nomePorUid(u) + ' → ' + nomePorUid(para)).slice(0, 80),
-      categoria: 'Acerto', segmento: 'À Vista', grupoId: g.id, valor: centavos(p.valor), pagoPor: u,
+      descricao: ('Acerto: ' + nomePorUid(pagador) + ' → ' + nomePorUid(para)).slice(0, 80),
+      categoria: 'Acerto', segmento: 'À Vista', grupoId: g.id, valor: centavos(p.valor), pagoPor: pagador,
       metodo: 'Igual', participantes: [para], divisao: null, acerto: true, mesRef: mesOk(p.mesRef),
       criadoPor: u, criadoEm: serverTimestamp()
     }));

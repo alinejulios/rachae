@@ -239,7 +239,8 @@ export function montarHistorico(db, grupoId, meUid, souDono) {
   const compraPorId = Object.fromEntries(comprasGrupo.map(c => [c.id, c]));
   const pagamentos = db.pagamentos.filter(p => compraPorId[p.compraId]).sort(porDataDesc).slice(0, 30).map(p => ({
     id: p.id, data: dataBR(p.data), compraId: codigoCompra(p.compraId), descricao: compraPorId[p.compraId].descricao,
-    pessoa: nome(p.pessoa), valor: reais(p.valor), podeApagar: souDono || p.pessoa === meUid
+    pessoa: nome(p.pessoa), valor: reais(p.valor), podeApagar: souDono || p.pessoa === meUid,
+    registradoPor: p.registradoPor && p.registradoPor !== p.pessoa ? nome(p.registradoPor) : null
   }));
   return { despesas, compras, pagamentos };
 }
