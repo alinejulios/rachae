@@ -157,7 +157,24 @@ service cloud.firestore {
           && metodoOk(request.resource.data.metodo)
           && participantesOk(request.resource.data.participantes)
           && divisaoOk(request.resource.data.divisao);
-        allow update: if false;
+        // Editar: quem lançou ou quem administra; só os campos do formulário (criadoPor/criadoEm
+        // nunca mudam). Acertos de contas não se editam.
+        allow update: if (isOwner(hid) || (isMember(hid) && resource.data.criadoPor == uid()))
+          && resource.data.get('acerto', false) != true
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['data', 'descricao', 'categoria', 'segmento',
+               'grupoId', 'valor', 'pagoPor', 'metodo', 'participantes', 'divisao', 'editadoPor', 'editadoEm'])
+          && request.resource.data.editadoPor == uid()
+          && request.resource.data.editadoEm == request.time
+          && dataISO(request.resource.data.data)
+          && str(request.resource.data.descricao, 1, 80)
+          && str(request.resource.data.categoria, 1, 40)
+          && str(request.resource.data.segmento, 1, 40)
+          && exists(/databases/$(database)/documents/households/$(hid)/grupos/$(request.resource.data.grupoId))
+          && centavos(request.resource.data.valor)
+          && memberExists(hid, request.resource.data.pagoPor)
+          && metodoOk(request.resource.data.metodo)
+          && participantesOk(request.resource.data.participantes)
+          && divisaoOk(request.resource.data.divisao);
         allow delete: if isOwner(hid) || (isMember(hid) && resource.data.criadoPor == uid());
       }
 
@@ -179,7 +196,23 @@ service cloud.firestore {
           && metodoOk(request.resource.data.metodo)
           && participantesOk(request.resource.data.participantes)
           && divisaoOk(request.resource.data.divisao);
-        allow update: if false;
+        // Editar: mesmas regras das despesas (pagamentos já feitos continuam valendo)
+        allow update: if (isOwner(hid) || (isMember(hid) && resource.data.criadoPor == uid()))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['data', 'descricao', 'categoria', 'grupoId',
+               'valor', 'comprador', 'nParcelas', 'metodo', 'participantes', 'divisao', 'parcelaSeguinte', 'editadoPor', 'editadoEm'])
+          && request.resource.data.editadoPor == uid()
+          && request.resource.data.editadoEm == request.time
+          && request.resource.data.get('parcelaSeguinte', false) is bool
+          && dataISO(request.resource.data.data)
+          && str(request.resource.data.descricao, 1, 80)
+          && str(request.resource.data.categoria, 1, 40)
+          && exists(/databases/$(database)/documents/households/$(hid)/grupos/$(request.resource.data.grupoId))
+          && centavos(request.resource.data.valor)
+          && memberExists(hid, request.resource.data.comprador)
+          && request.resource.data.nParcelas is int && request.resource.data.nParcelas >= 1 && request.resource.data.nParcelas <= 60
+          && metodoOk(request.resource.data.metodo)
+          && participantesOk(request.resource.data.participantes)
+          && divisaoOk(request.resource.data.divisao);
         allow delete: if isOwner(hid) || (isMember(hid) && resource.data.criadoPor == uid());
       }
 
@@ -195,7 +228,13 @@ service cloud.firestore {
           && str(request.resource.data.descricao, 1, 80)
           && str(request.resource.data.categoria, 1, 40)
           && centavos(request.resource.data.valor);
-        allow update: if false;
+        allow update: if isMember(hid) && uid() == donoId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['data', 'descricao', 'categoria', 'valor', 'editadoEm'])
+          && request.resource.data.editadoEm == request.time
+          && dataISO(request.resource.data.data)
+          && str(request.resource.data.descricao, 1, 80)
+          && str(request.resource.data.categoria, 1, 40)
+          && centavos(request.resource.data.valor);
       }
       match /pessoais/{donoId}/compras/{id} {
         // Ler/apagar: só a dona; vale mesmo depois de sair do grupo, para ela poder limpar os próprios dados
@@ -209,10 +248,20 @@ service cloud.firestore {
           && str(request.resource.data.categoria, 1, 40)
           && centavos(request.resource.data.valor)
           && request.resource.data.nParcelas is int && request.resource.data.nParcelas >= 1 && request.resource.data.nParcelas <= 60;
-        // Única alteração permitida: adiantar parcelas
-        allow update: if isMember(hid) && uid() == donoId
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['adiantamentos'])
-          && request.resource.data.adiantamentos is list && request.resource.data.adiantamentos.size() <= 60;
+        // Alterações: adiantar parcelas, ou editar os campos do formulário
+        allow update: if isMember(hid) && uid() == donoId && (
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['adiantamentos'])
+            && request.resource.data.adiantamentos is list && request.resource.data.adiantamentos.size() <= 60)
+          || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['data', 'descricao', 'categoria', 'valor',
+                'nParcelas', 'parcelaSeguinte', 'editadoEm'])
+            && request.resource.data.editadoEm == request.time
+            && request.resource.data.get('parcelaSeguinte', false) is bool
+            && dataISO(request.resource.data.data)
+            && str(request.resource.data.descricao, 1, 80)
+            && str(request.resource.data.categoria, 1, 40)
+            && centavos(request.resource.data.valor)
+            && request.resource.data.nParcelas is int && request.resource.data.nParcelas >= 1 && request.resource.data.nParcelas <= 60)
+        );
       }
 
       // -------------------------------------------------------------- pagamentos de parcela

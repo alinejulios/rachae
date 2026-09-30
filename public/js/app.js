@@ -456,7 +456,7 @@ function switchTab(tab, opts = {}) {
   if (!opts.keepScroll) window.scrollTo(0, 0);
 
   if (tab === 'dashboard') loadDashboard();
-  if (tab === 'despesa') renderDespesaForm();
+  if (tab === 'despesa') { if (!opts.editando) sairDaEdicao(); renderDespesaForm(); }
   if (tab === 'pagamento') renderPagamentoForm();
   if (tab === 'historico') loadHistorico();
   if (tab === 'casa') renderCasa();
@@ -826,6 +826,8 @@ function moneyInput(id, extraAttrs = '') {
 // Nova despesa: um só formulário. "Parcelado" acrescenta nº de parcelas, 1ª parcela no mês
 // seguinte e a prévia dos meses; por baixo, vira uma compra parcelada.
 let DESP_PARCELADO = false;
+// Editando um lançamento do histórico: { colecao, id, tagKey, dados, parceladoAntes } — null = nova despesa
+let EDITANDO = null;
 function renderDespesaForm() {
   const el = $('tab-despesa');
   const cfg = STATE.config;
@@ -833,11 +835,18 @@ function renderDespesaForm() {
     el.innerHTML = '<div class="card"><h3>Nova despesa</h3><p class="empty">Nenhum conjunto de despesas ainda. Crie um na tela do grupo (ícone de pessoa, no topo).</p></div>';
     return;
   }
-  TAG_DRAFTS['desp-tags-editor'] = [];
+  const ed = EDITANDO && EDITANDO.dados;
+  TAG_DRAFTS['desp-tags-editor'] = ed ? getTags(EDITANDO.tagKey).slice() : [];
+  // Na edição, o tipo (à vista/parcelado) e o lugar (grupo/pessoal) não mudam: são coleções diferentes
+  const grupoOpts = !ed ? optionsHtml(STATE.grupos.map(g => g.nome), noPessoal() ? null : grupoInicial()) +
+      (pessoaisLigadas() ? `<option value="${PESSOAL}" ${noPessoal() ? 'selected' : ''}>Pessoal (só você)</option>` : '')
+    : ed.grupo === PESSOAL ? `<option value="${PESSOAL}" selected>Pessoal (só você)</option>`
+    : optionsHtml(comAtual(STATE.grupos.map(g => g.nome), ed.grupo), ed.grupo);
   el.innerHTML = `
     <form class="card" data-submit="submitDespesa" novalidate autocomplete="off">
-      <h3>Nova despesa</h3>
-      <div class="segmented" role="radiogroup" aria-label="Forma de pagamento" style="position:static;margin-bottom:6px">
+      <h3>${ed ? (DESP_PARCELADO ? 'Editar despesa parcelada' : 'Editar despesa') : 'Nova despesa'}</h3>
+      ${ed ? '<p class="hint">Os saldos de todos serão recalculados com os novos valores.</p>' : ''}
+      <div class="segmented ${ed ? 'hidden' : ''}" role="radiogroup" aria-label="Forma de pagamento" style="position:static;margin-bottom:6px">
         <button type="button" role="radio" aria-checked="${!DESP_PARCELADO}" class="${DESP_PARCELADO ? '' : 'active'}" data-action="modoPagamento" data-parcelado="0">À vista</button>
         <button type="button" role="radio" aria-checked="${DESP_PARCELADO}" class="${DESP_PARCELADO ? 'active' : ''}" data-action="modoPagamento" data-parcelado="1">Parcelado</button>
       </div>
@@ -857,22 +866,53 @@ function renderDespesaForm() {
       <label for="desp-data">${DESP_PARCELADO ? 'Data da compra' : 'Data'}</label>
       <input type="date" id="desp-data" value="${todayStr()}" data-change="updateParcelaPreview">
       <label for="desp-categoria">Categoria</label>
-      <select id="desp-categoria">${optionsHtml(cfg.categorias)}</select>
+      <select id="desp-categoria">${optionsHtml(comAtual(cfg.categorias, ed && ed.categoria), ed && ed.categoria)}</select>
       <label for="desp-segmento">Segmento</label>
-      <select id="desp-segmento">${optionsHtml(cfg.segmentos)}</select>
+      <select id="desp-segmento">${optionsHtml(comAtual(cfg.segmentos, ed && ed.segmento), ed && ed.segmento)}</select>
       <label for="desp-grupo">Conjunto de despesas</label>
-      <select id="desp-grupo" data-change="renderPessoasFields" data-prefix="desp">${optionsHtml(STATE.grupos.map(g => g.nome), noPessoal() ? null : grupoInicial())}${
-        pessoaisLigadas() ? `<option value="${PESSOAL}" ${noPessoal() ? 'selected' : ''}>Pessoal (só você)</option>` : ''}</select>
+      <select id="desp-grupo" data-change="renderPessoasFields" data-prefix="desp">${grupoOpts}</select>
       <div id="desp-pessoas-fields"></div>
       <span class="field-label">Tags</span>
       <div id="desp-tags-editor"></div>
-      <button class="primary" type="submit">${DESP_PARCELADO ? 'Adicionar despesa parcelada' : 'Adicionar despesa'}</button>
+      <button class="primary" type="submit">${ed ? 'Salvar alterações' : DESP_PARCELADO ? 'Adicionar despesa parcelada' : 'Adicionar despesa'}</button>
+      ${ed ? '<button class="secondary" type="button" data-action="cancelarEdicao" style="margin-top:10px">Cancelar</button>' : ''}
     </form>
   `;
+  if (ed) preencherEdicao(ed);
   renderPessoasFields('desp');
+  if (ed && ed.grupo !== PESSOAL) preencherPessoasEdicao(ed);
   renderTagEditor('desp-tags-editor');
   if (DESP_PARCELADO) ACTIONS.updateParcelaPreview();
 }
+// Lista de opções + o valor atual do lançamento, se ele não estiver mais na lista (ex.: categoria renomeada)
+function comAtual(lista, atual) { return atual && !lista.includes(atual) ? [...lista, atual] : lista; }
+const fmtNum = v => Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function preencherEdicao(ed) {
+  $('desp-descricao').value = ed.descricao;
+  $('desp-valor').value = fmtNum(ed.valorTotal);
+  $('desp-data').value = ed.data;
+  if (DESP_PARCELADO) { $('desp-nparc').value = String(ed.nParcelas); $('desp-seguinte').checked = ed.parcelaSeguinte; }
+}
+function preencherPessoasEdicao(ed) {
+  if ($('desp-pagopor')) $('desp-pagopor').value = ed.pagoPor;
+  document.querySelectorAll('.desp-participa-input').forEach(i => { i.checked = ed.participantes.includes(i.dataset.nome); });
+  updateParticipaHint('desp');
+  $('desp-metodo').value = ed.metodo;
+  renderDivisaoFields('desp');
+  if (ed.divisao) {
+    const pct = ed.metodo === 'Porcentagem';
+    document.querySelectorAll('.desp-div-input').forEach(i => {
+      const v = ed.divisao[i.dataset.nome];
+      if (v != null) i.value = pct ? Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) : fmtNum(v);
+    });
+    updateDivisaoHint('desp');
+  }
+}
+function sairDaEdicao() {
+  if (EDITANDO) DESP_PARCELADO = EDITANDO.parceladoAntes;
+  EDITANDO = null;
+}
+ACTIONS.cancelarEdicao = () => { sairDaEdicao(); switchTab('historico'); };
 // Troca À vista ⇄ Parcelado sem perder o que já foi digitado
 ACTIONS.modoPagamento = el => {
   const novo = el.dataset.parcelado === '1';
@@ -916,7 +956,11 @@ function renderPessoasFields(prefixOrEl) {
       : '<p class="hint">🔒 Despesa pessoal: só você vê e ela não entra na divisão do grupo.</p>');
     return;
   }
-  const membros = grupoMembros($(prefix + '-grupo').value);
+  let membros = grupoMembros($(prefix + '-grupo').value);
+  const ed = prefix === 'desp' && EDITANDO && EDITANDO.dados;
+  if (ed && ed.grupo === $(prefix + '-grupo').value) {
+    [ed.pagoPor, ...ed.participantes].forEach(n => { if (!membros.includes(n)) membros = [...membros, n]; });
+  }
   const pagadorLabel = parcelado ? 'Quem pagou (no cartão de quem)' : 'Pago por';
   const pagadorId = prefix === 'desp' ? 'desp-pagopor' : 'compra-comprador';
   const oque = parcelado ? 'desta compra' : 'desta despesa';
@@ -1050,7 +1094,10 @@ function lerFormularioDespesa() {
   const pessoal = $('desp-grupo').value === PESSOAL;
   const valorTotal = parseMoney($('desp-valor').value);
   const nParcelas = DESP_PARCELADO ? parseInt($('desp-nparc').value, 10) : 1;
-  if (DESP_PARCELADO && !(nParcelas >= 2 && nParcelas <= 60)) return { erro: 'Informe de 2 a 60 parcelas (para 1x, use À vista).' };
+  const minParcelas = EDITANDO ? 1 : 2; // compras antigas podem ter 1 parcela
+  if (DESP_PARCELADO && !(nParcelas >= minParcelas && nParcelas <= 60)) {
+    return { erro: EDITANDO ? 'Informe de 1 a 60 parcelas.' : 'Informe de 2 a 60 parcelas (para 1x, use À vista).' };
+  }
   const base = {
     data: $('desp-data').value || todayStr(),
     descricao: $('desp-descricao').value.trim(),
@@ -1078,6 +1125,20 @@ ACTIONS.submitDespesa = async form => {
   if (erro) { showToast(erro, true); vibrate(60); return; }
   const pessoal = payload.grupo === PESSOAL;
   const tags = (TAG_DRAFTS['desp-tags-editor'] || []).slice();
+  if (EDITANDO) {
+    const { colecao, id, tagKey } = EDITANDO;
+    await withBusy(form.querySelector('button[type=submit]'), async () => {
+      try {
+        await api('editarLancamento', { colecao, id, payload });
+        saveTags(tagKey, tags);
+        vibrate(20);
+        showToast('Alterações salvas.');
+        sairDaEdicao();
+        switchTab('historico');
+      } catch (err) { onApiError(err); }
+    });
+    return;
+  }
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
       if (DESP_PARCELADO) {
@@ -1100,7 +1161,7 @@ ACTIONS.updateParcelaPreview = () => {
   const valor = parseMoney($('desp-valor').value) || 0;
   const n = parseInt($('desp-nparc').value, 10) || 0;
   const seguinte = $('desp-seguinte').checked;
-  store.set(K.parcelaSeguinte, !!seguinte); // lembra a preferência neste aparelho
+  if (!EDITANDO) store.set(K.parcelaSeguinte, !!seguinte); // lembra a preferência neste aparelho
   const [a, m] = ($('desp-data').value || todayStr()).split('-').map(Number);
   const primeira = new Date(a, m - 1 + (seguinte ? 1 : 0), 1);
   const ultima = new Date(a, m - 1 + (seguinte ? 1 : 0) + Math.max(n, 1) - 1, 1);
@@ -1241,6 +1302,7 @@ function renderHistorico(data) {
           <div class="top"><span>${h(d.descricao)}</span><span>${fmtBRL(d.valor)}</span></div>
           <div class="sub">${h(d.data)} · ${h(d.categoria)}</div>
           <div id="tags-desp-${h(d.row)}"></div>
+          ${editarBtn('pessoais', d.id, 'desp:' + d.row, true)}
           ${apagarBtn('pessoais', d.id, true)}
         </div>`).join('') : '<p class="empty">Nenhuma despesa pessoal lançada ainda.</p>'}</div>
       <div class="card"><h3>🔒 Parceladas pessoais</h3>
@@ -1251,6 +1313,7 @@ function renderHistorico(data) {
             ${c.parcelaAtual >= c.nParcelas ? 'quitada' : 'parcela ' + c.parcelaAtual + '/' + c.nParcelas + ' · faltam ' + fmtBRL(c.restante)}</div>
           <div id="tags-compra-${h(c.row)}"></div>
           ${c.aVencer > 0 ? `<button type="button" class="del-btn" style="margin-right:14px" data-action="adiantarPessoal" data-id="${h(c.id)}" data-max="${c.aVencer}" data-parcela="${c.valorParcela}">Adiantar parcelas</button>` : ''}
+          ${editarBtn('pessoaisCompras', c.id, 'compra:' + c.row, true)}
           ${apagarBtn('pessoaisCompras', c.id, true)}
         </div>`).join('') : '<p class="empty">Nenhuma compra parcelada pessoal ainda.</p>'}</div>`;
     data.despesas.forEach(d => renderHistTags('tags-desp-' + d.row, 'desp:' + d.row));
@@ -1269,6 +1332,7 @@ function renderHistorico(data) {
         <div class="sub">${d.acerto ? h(d.data) + ' · acerto de contas via Pix'
           : `${h(d.data)} · ${h(d.categoria)}${d.segmento ? ' · ' + h(d.segmento) : ''} · pago por ${h(d.pagoPor)} · ${h(d.metodo)}`}</div>
         <div id="tags-desp-${h(d.row)}"></div>
+        ${editarBtn('despesas', d.id, 'desp:' + d.row, d.podeApagar && !d.acerto)}
         ${apagarBtn('despesas', d.id, d.podeApagar)}
       </div>`).join('') : '<p class="empty">Nenhuma despesa lançada ainda.</p>')}
     ${card('compras', data.compras.length ? data.compras.map(c => `
@@ -1276,6 +1340,7 @@ function renderHistorico(data) {
         <div class="top"><span>${h(c.descricao)}</span><span>${fmtBRL(c.valorTotal)}</span></div>
         <div class="sub">${h(c.id)} · ${h(c.data)} · ${h(c.categoria)} · ${h(c.comprador)} em ${h(c.nParcelas)}x · em aberto: ${fmtBRL(c.saldoTotal)}</div>
         <div id="tags-compra-${h(c.id)}"></div>
+        ${editarBtn('compras', c.docId, 'compra:' + c.id, c.podeApagar)}
         ${apagarBtn('compras', c.docId, c.podeApagar)}
       </div>`).join('') : '<p class="empty">Nenhuma compra parcelada lançada ainda.</p>')}
     ${card('pagamentos', data.pagamentos.length ? data.pagamentos.map(p => `
@@ -1299,6 +1364,18 @@ ACTIONS.adiantarPessoal = async el => {
     await api('adiantarParcelasPessoal', { id: el.dataset.id, qtd });
     showToast(qtd + (qtd > 1 ? ' parcelas adiantadas.' : ' parcela adiantada.'));
     loadHistorico();
+  } catch (err) { onApiError(err); }
+};
+function editarBtn(colecao, id, tagKey, pode) {
+  return pode ? `<button type="button" class="del-btn" style="margin-right:14px" data-action="editarItem" data-colecao="${colecao}" data-id="${h(id)}" data-tagkey="${h(tagKey)}">Editar</button>` : '';
+}
+ACTIONS.editarItem = async el => {
+  try {
+    const dados = await api('lancamento', { colecao: el.dataset.colecao, id: el.dataset.id });
+    const parceladoAntes = EDITANDO ? EDITANDO.parceladoAntes : DESP_PARCELADO;
+    EDITANDO = { colecao: el.dataset.colecao, id: el.dataset.id, tagKey: el.dataset.tagkey, dados, parceladoAntes };
+    DESP_PARCELADO = dados.parcelado;
+    switchTab('despesa', { editando: true });
   } catch (err) { onApiError(err); }
 };
 function apagarBtn(colecao, id, pode) {

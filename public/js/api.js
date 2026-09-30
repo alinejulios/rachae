@@ -521,6 +521,60 @@ const ACOES = {
     await deleteDoc(doc(fs, 'households', CASA.id, colecao, id));
     return { ok: true };
   },
+  // Edição: devolve o lançamento no formato do formulário (nomes e reais; porcentagem de 0 a 100)
+  lancamento({ colecao, id }) {
+    const lista = { despesas: DB.despesas, compras: DB.compras, pessoais: DB.pessoais, pessoaisCompras: DB.pessoaisCompras }[colecao];
+    const x = lista && lista.find(i => i.id === id);
+    if (!x) throw new ApiError('Lançamento não encontrado.');
+    if (x.acerto) throw new ApiError('Acertos de contas não podem ser editados. Apague e registre de novo.');
+    const pessoal = colecao === 'pessoais' || colecao === 'pessoaisCompras';
+    const parcelado = colecao === 'compras' || colecao === 'pessoaisCompras';
+    const out = { data: x.data, descricao: x.descricao, categoria: x.categoria, valorTotal: x.valor / 100, parcelado,
+      nParcelas: x.nParcelas || 1, parcelaSeguinte: !!x.parcelaSeguinte, grupo: PESSOAL };
+    if (pessoal) return out;
+    const g = DB.grupos.find(y => y.id === x.grupoId);
+    if (!g) throw new ApiError('O conjunto deste lançamento não existe mais.');
+    const pagador = parcelado ? x.comprador : x.pagoPor;
+    // Quem saiu do grupo não aparece no formulário: editar faria a pessoa sumir da divisão
+    const uids = [pagador, ...(x.participantes || []), ...Object.keys(x.divisao || {})];
+    if (uids.some(u => !DB.membros.some(m => m.uid === u))) {
+      throw new ApiError('Este lançamento envolve alguém que saiu do grupo e não pode ser editado.');
+    }
+    const pct = x.metodo === 'Porcentagem';
+    return { ...out, grupo: g.nome, segmento: x.segmento, metodo: x.metodo, pagoPor: nomePorUid(pagador),
+      participantes: (x.participantes || []).map(nomePorUid),
+      divisao: x.divisao ? Object.fromEntries(Object.entries(x.divisao).map(([u, v]) => [nomePorUid(u), pct ? v * 100 : v / 100])) : null };
+  },
+  // Só troca os campos do formulário; criadoPor, criadoEm, adiantamentos etc. ficam como estão
+  async editarLancamento({ colecao, id, payload }) {
+    const u = usuarioAtual().uid;
+    const base = { data: dataOk(payload.data), descricao: String(payload.descricao).trim().slice(0, 80),
+      categoria: payload.categoria, valor: centavos(payload.valorTotal), editadoEm: serverTimestamp() };
+    const nParcelas = () => Math.max(1, Math.min(60, parseInt(payload.nParcelas, 10) || 1));
+    if (colecao === 'pessoais' || colecao === 'pessoaisCompras') {
+      if (payload.grupo !== PESSOAL) throw new ApiError('Despesa pessoal continua pessoal.');
+      const lista = colecao === 'pessoais' ? DB.pessoais : DB.pessoaisCompras;
+      if (!lista.some(x => x.id === id)) throw new ApiError('Lançamento não encontrado.');
+      const sub = colecao === 'pessoais' ? 'despesas' : 'compras';
+      const campos = sub === 'compras' ? { ...base, nParcelas: nParcelas(), parcelaSeguinte: !!payload.parcelaSeguinte } : base;
+      await updateDoc(doc(fs, 'households', CASA.id, 'pessoais', u, sub, id), campos);
+      return { ok: true };
+    }
+    if (!['despesas', 'compras'].includes(colecao)) throw new ApiError('Tipo inválido.');
+    const atual = DB[colecao].find(x => x.id === id);
+    if (!atual) throw new ApiError('Lançamento não encontrado.');
+    if (atual.acerto) throw new ApiError('Acertos de contas não podem ser editados.');
+    if (!souDono() && atual.criadoPor !== u) throw new ApiError('Só quem lançou (ou quem administra o grupo) pode editar.');
+    if (payload.grupo === PESSOAL) throw new ApiError('Lançamento do grupo não pode virar pessoal.');
+    const g = grupoPorNome(payload.grupo);
+    const comum = { ...base, grupoId: g.id, metodo: payload.metodo, participantes: payload.participantes.map(uidPorNome),
+      divisao: divisaoParaUids(payload), editadoPor: u };
+    const campos = colecao === 'compras'
+      ? { ...comum, comprador: uidPorNome(payload.comprador), nParcelas: nParcelas(), parcelaSeguinte: !!payload.parcelaSeguinte }
+      : { ...comum, segmento: payload.segmento, pagoPor: uidPorNome(payload.pagoPor) };
+    await updateDoc(doc(fs, 'households', CASA.id, colecao, id), campos);
+    return { ok: true };
+  },
   async salvarGrupo({ id, nome, tipo, membros }) {
     const n = String(nome || '').trim().slice(0, 30);
     if (!n) throw new ApiError('Dê um nome ao conjunto.');
