@@ -124,8 +124,11 @@ service cloud.firestore {
             && p.tipo in ['cpf', 'cnpj', 'telefone', 'email', 'aleatoria']
             && str(p.chave, 1, 77) && str(p.nome, 1, 60) && str(p.cidade, 1, 15));
         }
+        // O email só pode virar o email atual da conta (depois de a pessoa trocar o email)
         allow update: if signedIn() && uid() == memberId
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nome', 'pix'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nome', 'pix', 'email'])
+          && (!('email' in request.resource.data.diff(resource.data).affectedKeys())
+              || request.resource.data.email == request.auth.token.email)
           && str(request.resource.data.nome, 1, 40)
           && pixOk(request.resource.data.get('pix', null));
         // Sair do grupo (a própria pessoa) ou ser removida pelo admin. O admin só

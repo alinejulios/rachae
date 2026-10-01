@@ -14,7 +14,8 @@ import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
   sendPasswordResetEmail, signOut, updateProfile, sendEmailVerification,
   GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, linkWithCredential,
-  reauthenticateWithPopup, EmailAuthProvider, updatePassword
+  reauthenticateWithPopup, EmailAuthProvider, updatePassword,
+  reauthenticateWithCredential, verifyBeforeUpdateEmail, linkWithPopup, unlink
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
@@ -69,6 +70,9 @@ const ERROS = {
   'auth/popup-blocked': 'O navegador bloqueou a janela do Google. Permita pop-ups para este site e tente de novo.',
   'auth/requires-recent-login': 'Por segurança, entre de novo e tente outra vez.',
   'auth/credential-already-in-use': 'Essa conta Google já está ligada a outra conta do Rachaê.',
+  'auth/user-mismatch': 'Essa conta Google não é a desta conta. Escolha a conta Google ligada ao Rachaê.',
+  'auth/provider-already-linked': 'Sua conta já está ligada a uma conta Google.',
+  'auth/no-such-provider': 'Sua conta não está ligada ao Google.',
   'auth/account-exists-with-different-credential': 'Esse email já tem conta com senha. Entre com a senha para ligar o Google a ela.',
   'permission-denied': 'Sem permissão para isso.',
   'unavailable': 'Sem conexão com o servidor. Tente de novo.'
@@ -232,7 +236,7 @@ export const esqueciSenha = email => tenta(async () => {
 export async function sair() {
   pararEscuta();
   CASA = null; DB = null;
-  GOOGLE_PENDENTE = null;
+  GOOGLE_PENDENTE = null; SINCRONIZADO = '';
   TODOS_CACHE = { em: 0, grupos: null };
   if (auth) await signOut(auth);
 }
@@ -295,7 +299,6 @@ export const carregarCasa = (hidDesejada) => tenta(async () => {
   }
   pararEscuta();
   CASA = null; DB = null;
-  GOOGLE_PENDENTE = null;
   return null;
 });
 
@@ -914,15 +917,6 @@ const ACOES = {
     CASA.nome = n;
     return { ok: true };
   },
-  async renomearMe({ nome }) {
-    const n = validarNome(nome);
-    const u = usuarioAtual().uid;
-    if (DB.membros.some(m => m.uid !== u && m.nome.toLowerCase() === n.toLowerCase())) {
-      throw new ApiError('Já tem alguém com esse nome no grupo. Use um sobrenome ou apelido.');
-    }
-    await updateDoc(doc(fs, 'households', CASA.id, 'membros', u), { nome: n });
-    return { ok: true, nome: n };
-  },
   membros() {
     return DB.membros.map(m => ({ nome: m.nome, email: m.email, uid: m.uid, dono: m.uid === CASA.ownerUid, temPix: !!m.pix }))
       .sort((a, b) => b.dono - a.dono || a.nome.localeCompare(b.nome, 'pt-BR'));
@@ -971,6 +965,129 @@ export const meusGastos = (forcar = false) => tenta(async () => {
     grupos: grupos.map(g => ({ id: g.id, nome: g.nome })),
     itens: minhasDespesas(grupos, u.uid)
   };
+});
+
+// ------------------------------------------------------------------ minha conta
+// Nome, email e chave Pix valem para todos os grupos: ficam copiados no registro
+// de membro (households/{hid}/membros/{uid}) de cada grupo. O nome da conta é o
+// displayName do Firebase Auth. Senha e Google são da conta do Firebase Auth.
+const provedores = u => (u.providerData || []).map(p => p.providerId);
+/** Resumo da conta para a tela Minha conta. */
+export function minhaConta() {
+  const u = usuarioAtual();
+  const g = (u.providerData || []).find(p => p.providerId === 'google.com');
+  return { nome: u.displayName || '', email: u.email || '', emailConfirmado: !!u.emailVerified,
+    temSenha: temSenha(u), google: g ? (g.email || u.email) : '' };
+}
+/** Meus registros de membro em cada grupo acessível: [{ hid, nomeGrupo, dados }]. */
+async function meusRegistros() {
+  const u = usuarioAtual();
+  const { casas } = await lerPerfil(u.uid);
+  const out = [];
+  for (const hid of [...new Set([CASA && CASA.id, ...casas].filter(Boolean))]) {
+    try {
+      const [c, m] = await Promise.all([getDoc(doc(fs, 'households', hid)), getDoc(doc(fs, 'households', hid, 'membros', u.uid))]);
+      if (c.exists() && m.exists()) out.push({ hid, nomeGrupo: c.data().nome || 'Grupo', dados: m.data() });
+    } catch (e) { /* grupo inacessível */ }
+  }
+  return out;
+}
+/** Confirma que é a própria pessoa: com a senha atual, ou com o Google se ela deixar a senha em branco. */
+async function reautenticar(senhaAtual) {
+  const u = usuarioAtual();
+  if (senhaAtual) {
+    try { await reauthenticateWithCredential(u, EmailAuthProvider.credential(u.email, senhaAtual)); }
+    catch (e) {
+      if (['auth/invalid-credential', 'auth/wrong-password'].includes(e.code)) throw new ApiError('Senha atual incorreta.', e.code);
+      throw e;
+    }
+    return;
+  }
+  if (provedores(u).includes('google.com')) { await reauthenticateWithPopup(u, provedorGoogle()); return; }
+  throw new ApiError('Digite sua senha atual.');
+}
+/** Troca o nome em todos os grupos (pula grupo onde outra pessoa já usa esse nome). */
+export const salvarNomeConta = nome => tenta(async () => {
+  const u = usuarioAtual();
+  const n = validarNome(nome);
+  const atualizados = [], conflitos = [];
+  for (const r of await meusRegistros()) {
+    if (r.dados.nome === n) { atualizados.push(r.hid); continue; }
+    const outros = (await getDocs(collection(fs, 'households', r.hid, 'membros'))).docs
+      .filter(d => d.id !== u.uid && String(d.data().nome || '').toLowerCase() === n.toLowerCase());
+    if (outros.length) { conflitos.push(r.nomeGrupo); continue; }
+    try { await updateDoc(doc(fs, 'households', r.hid, 'membros', u.uid), { nome: n }); atualizados.push(r.hid); }
+    catch (e) { conflitos.push(r.nomeGrupo); }
+  }
+  await updateProfile(u, { displayName: n });
+  return { nome: n, grupos: atualizados.length, conflitos, atualizouAtual: !!CASA && atualizados.includes(CASA.id) };
+});
+/** Troca a senha (pede a senha atual; em branco = confirma com o Google). */
+export const trocarSenha = (senhaAtual, nova) => tenta(async () => {
+  const u = usuarioAtual();
+  await reautenticar(senhaAtual);
+  if (temSenha(u)) await updatePassword(u, nova);
+  else await linkWithCredential(u, EmailAuthProvider.credential(u.email, nova));
+  await u.reload();
+});
+/**
+ * Troca o email: o Firebase manda um link para o email NOVO e só troca depois do
+ * clique (então a pessoa entra de novo com o email novo). Os grupos são atualizados
+ * sozinhos no próximo acesso (sincronizarConta).
+ */
+export const trocarEmail = (novo, senhaAtual, continuar = location.origin + '/') => tenta(async () => {
+  const u = usuarioAtual();
+  const e = String(novo || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new ApiError('Digite um email válido.');
+  if (e === String(u.email || '').toLowerCase()) throw new ApiError('Esse já é o seu email.');
+  await reautenticar(senhaAtual);
+  try {
+    try { await verifyBeforeUpdateEmail(u, e, { url: continuar }); }
+    catch (err) {
+      if (!/continue-uri|unauthorized-domain|invalid-continue|missing-continue/.test(err.code || '')) throw err;
+      await verifyBeforeUpdateEmail(u, e);
+    }
+  } catch (err) {
+    if (err.code === 'auth/email-already-in-use') throw new ApiError('Esse email já é usado por outra conta do Rachaê.', err.code);
+    throw err;
+  }
+  return e;
+});
+/** Liga uma conta Google a esta conta (depois dá para entrar pelo botão do Google). */
+export const vincularGoogle = () => tenta(async () => {
+  const u = usuarioAtual();
+  try { await linkWithPopup(u, provedorGoogle()); }
+  catch (e) {
+    if (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') throw new ApiError('', 'CANCELADO');
+    throw e;
+  }
+  await u.reload();
+});
+/** Desliga o Google (só se a conta tiver senha, para não ficar sem forma de entrar). */
+export const desvincularGoogle = () => tenta(async () => {
+  const u = usuarioAtual();
+  if (!temSenha(u)) throw new ApiError('Crie uma senha antes de desligar o Google, senão você fica sem como entrar.');
+  await unlink(u, 'google.com');
+  await u.reload();
+});
+/**
+ * Uma vez por sessão: leva o email da conta para os grupos (depois de trocar o email)
+ * e copia a chave Pix para grupos onde ela nunca foi cadastrada (ex.: grupo novo).
+ * Só completa — não troca nome nem chave que a pessoa já tem num grupo.
+ */
+let SINCRONIZADO = '';
+export const sincronizarConta = () => tenta(async () => {
+  const u = usuarioAtual();
+  if (!u || !u.email || SINCRONIZADO === u.uid + u.email) return;
+  SINCRONIZADO = u.uid + u.email;
+  const regs = await meusRegistros();
+  const comPix = regs.find(r => r.dados.pix);
+  for (const r of regs) {
+    const patch = {};
+    if (r.dados.email !== u.email) patch.email = u.email;
+    if (!('pix' in r.dados) && comPix) patch.pix = comPix.dados.pix;
+    if (Object.keys(patch).length) await updateDoc(doc(fs, 'households', r.hid, 'membros', u.uid), patch).catch(() => {});
+  }
 });
 
 /** Anexa a chave Pix de quem recebe às sugestões de acerto e às compras em aberto. */

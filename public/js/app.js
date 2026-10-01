@@ -164,7 +164,7 @@ function chaveGrupo() { return K.grupo + '_' + ((STATE.casa && STATE.casa.id) ||
 
 /** Nome para entrar num grupo novo: o do grupo atual, o da conta, ou o começo do email. */
 function nomeParaEntrar(user) {
-  const candidatos = [STATE.pessoa, user.displayName, (user.email || '').split('@')[0].replace(/[^\p{L} ]/gu, ' ').trim()];
+  const candidatos = [user.displayName, STATE.pessoa, (user.email || '').split('@')[0].replace(/[^\p{L} ]/gu, ' ').trim()];
   return candidatos.find(n => n && /^[\p{L}][\p{L} .'-]{0,39}$/u.test(n.trim())) || 'Convidado';
 }
 
@@ -190,8 +190,8 @@ function desenharRegras(ul) {
     .concat([['as duas senhas iguais', !!senha && senha === repetida]]);
   ul.innerHTML = itens.map(([txt, ok]) => `<li class="${ok ? 'ok' : ''}">${ok ? '✓' : '○'} ${h(txt)}</li>`).join('');
 }
-function prepararRegrasSenha() {
-  document.querySelectorAll('.senha-regras').forEach(ul => {
+function prepararRegrasSenha(raiz = document) {
+  raiz.querySelectorAll('.senha-regras').forEach(ul => {
     desenharRegras(ul);
     [ul.dataset.para, ul.dataset.para + '2'].forEach(id => $(id).addEventListener('input', () => desenharRegras(ul)));
   });
@@ -478,6 +478,7 @@ function enterApp(nome) {
   $('who-name').textContent = nome;
   $('who-casa').textContent = (STATE.casa && STATE.casa.nome) || 'Rachaê';
   loadGrupos();
+  Firebase.sincronizarConta().catch(() => {});
   // Convites por email para outros grupos aparecem no Início
   carregarConvitesPendentes().then(() => { if ($('convites-pendentes')) $('convites-pendentes').innerHTML = convitesPendentesHtml(CONVITES_PENDENTES); });
 }
@@ -1753,8 +1754,8 @@ ACTIONS.previaNomeQR = () => {
     : qr === nome ? 'O nome cabe inteiro no QR Code.'
     : 'No QR Code (limite de 25 do Banco Central) vai aparecer "' + qr + '". Quem paga vê o nome oficial da conta no banco.';
 };
-ACTIONS.editarPix = () => { EDITANDO_PIX = true; renderCasa(); };
-ACTIONS.cancelarPix = () => { EDITANDO_PIX = false; renderCasa(); };
+ACTIONS.editarPix = () => { EDITANDO_PIX = true; renderMeusGrupos(); };
+ACTIONS.cancelarPix = () => { EDITANDO_PIX = false; renderMeusGrupos(); };
 ACTIONS.salvarPix = async form => {
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
@@ -1763,13 +1764,13 @@ ACTIONS.salvarPix = async form => {
       });
       EDITANDO_PIX = false;
       showToast(res.grupos > 1 ? 'Chave Pix salva nos seus ' + res.grupos + ' grupos!' : 'Chave Pix salva!');
-      setTimeout(renderCasa, 300);
+      setTimeout(renderMeusGrupos, 300);
     } catch (err) { onApiError(err); }
   });
 };
 ACTIONS.removerPix = async () => {
   if (!confirm('Remover sua chave Pix de todos os seus grupos?')) return;
-  try { await api('removerPix'); showToast('Chave Pix removida.'); setTimeout(renderCasa, 300); } catch (err) { onApiError(err); }
+  try { await api('removerPix'); showToast('Chave Pix removida.'); setTimeout(renderMeusGrupos, 300); } catch (err) { onApiError(err); }
 };
 
 // ---------- Acertar as contas (painel) ----------
@@ -1928,23 +1929,15 @@ async function renderCasa() {
         <div class="list-row">
           <div>${h(m.nome)}${m.dono ? '<span class="badge">admin</span>' : ''}${m.uid === eu.uid ? '<span class="badge">você</span>' : ''}
             <div class="sub">${h(m.email)}</div></div>
-          ${m.uid === eu.uid ? '<button type="button" class="del-btn" data-action="editarNome" data-qual="eu">Mudar meu nome</button>'
+          ${m.uid === eu.uid ? '<button type="button" class="del-btn" data-tab="grupos">Mudar em Minha conta</button>'
             : (dono && !m.dono ? `<button type="button" class="del-btn" data-action="removerMembro" data-uid="${h(m.uid)}" data-nome="${h(m.nome)}">Remover</button>` : '')}
         </div>`).join('')}
-      ${EDITANDO_NOME === 'eu' ? `
-        <form data-submit="salvarMeuNome" novalidate>
-          <label for="meu-nome-input">Seu nome neste grupo</label>
-          <input type="text" id="meu-nome-input" maxlength="40" value="${h(STATE.pessoa || '')}" autocapitalize="words">
-          <div class="btn-row">
-            <button class="secondary" type="button" data-action="editarNome" data-qual="">Cancelar</button>
-            <button class="primary" type="submit">Salvar</button>
-          </div>
-        </form>` : ''}
     </div>
 
     <div class="card">
-      <h3>Minha chave Pix</h3>
-      <div id="meu-pix">${meuPixHtml(await api('meuPix'))}</div>
+      <h3>Meu nome e minha chave Pix</h3>
+      <p class="hint" style="margin-top:0">Valem para todos os seus grupos. Para mudar, use Minha conta, no Perfil.</p>
+      <button class="secondary" type="button" data-tab="grupos">Abrir Minha conta</button>
     </div>
 
     ${dono ? `
@@ -2008,7 +2001,6 @@ async function renderCasa() {
     </div>`}
   `;
   if (GRUPO_EDITANDO !== null) renderGrupoForm(grupos.find(g => g.id === GRUPO_EDITANDO) || null);
-  if (EDITANDO_PIX) { ajustarCampoChave(); ACTIONS.previaNomeQR(); }
   if (dono) renderConvitesEmail();
 }
 
@@ -2017,7 +2009,8 @@ async function renderMeusGrupos() {
   const el = $('tab-grupos');
   const casa = Firebase.casaAtual();
   const eu = Firebase.usuarioAtual();
-  const [casas, convites] = await Promise.all([Firebase.minhasCasas().catch(() => []), carregarConvitesPendentes()]);
+  const [casas, convites, meuPix] = await Promise.all([Firebase.minhasCasas().catch(() => []), carregarConvitesPendentes(),
+    api('meuPix').catch(() => null)]);
   el.innerHTML = `
     <h2 class="page-title">Meus grupos</h2>
     <p class="page-sub">Toque num grupo para abrir. Os ajustes de cada grupo ficam na engrenagem ⚙️, dentro dele.</p>
@@ -2041,18 +2034,149 @@ async function renderMeusGrupos() {
           sem sair dos seus grupos.</p>` : ''}
     </div>
 
-    <h2 class="page-title" style="margin-top:22px">Minha conta</h2>
-    <div class="card">
-      <div class="list-row"><div>Email<div class="sub">${h(eu ? eu.email : '')}${Firebase.emailConfirmado() ? ' · confirmado ✓' : ' · não confirmado'}</div></div></div>
-      ${Firebase.emailConfirmado() ? '' : `
-        <p class="hint">Confirme seu email para receber convites de grupos por email.</p>
-        <button class="secondary" type="button" data-action="confirmarMeuEmail">Confirmar meu email</button>`}
-      <p class="hint">Seu nome pode ser diferente em cada grupo: mude nos ajustes ⚙️ de cada um.</p>
-      <button class="secondary danger" type="button" data-action="logout">Sair da conta neste aparelho</button>
-    </div>
+    ${minhaContaHtml(meuPix)}
   `;
   if (OUTRA_CASA !== null) renderOutraCasaForm();
+  if (EDITANDO_PIX) { ajustarCampoChave(); ACTIONS.previaNomeQR(); }
+  prepararRegrasSenha(el);
 }
+
+// ---------- Minha conta: nome, email, Pix, senha e Google (valem para todos os grupos) ----------
+let EDITANDO_CONTA = ''; // '', 'nome', 'email' ou 'senha'
+function minhaContaHtml(meuPix) {
+  const c = Firebase.minhaConta();
+  const cancelar = '<button class="secondary" type="button" data-action="editarConta" data-qual="">Cancelar</button>';
+  const campoSenhaAtual = (id, uso) => `
+    <label for="${id}">Senha atual</label>
+    <input type="password" id="${id}" autocomplete="current-password">
+    ${c.google ? `<p class="hint">Não lembra? Deixe em branco para confirmar ${uso} com o Google.</p>` : ''}`;
+  return `
+    <h2 class="page-title" style="margin-top:22px">Minha conta</h2>
+    <p class="page-sub">Seu nome, email e chave Pix valem para todos os seus grupos.</p>
+
+    <div class="card">
+      <h3>Seus dados</h3>
+      ${EDITANDO_CONTA === 'nome' ? `
+        <form data-submit="salvarNomeConta" novalidate>
+          <label for="conta-nome-input">Seu nome (como aparece nos grupos)</label>
+          <input type="text" id="conta-nome-input" maxlength="40" value="${h(c.nome || STATE.pessoa || '')}" autocapitalize="words">
+          <div class="btn-row">${cancelar}<button class="primary" type="submit">Salvar</button></div>
+        </form>` : `
+        <div class="list-row">
+          <div>Nome<div class="sub">${h(c.nome || STATE.pessoa || '—')}</div></div>
+          <button type="button" class="del-btn" data-action="editarConta" data-qual="nome">Alterar</button>
+        </div>`}
+      ${EDITANDO_CONTA === 'email' ? `
+        <form data-submit="salvarEmailConta" novalidate>
+          <label for="conta-email-novo">Novo email</label>
+          <input type="email" id="conta-email-novo" autocomplete="email" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email">
+          ${campoSenhaAtual('conta-email-senha', 'a troca')}
+          <p class="hint">Vamos mandar um link para o email novo. A troca só vale depois que você tocar nele;
+            aí é só entrar de novo com o email novo. Seus grupos e despesas continuam os mesmos.</p>
+          <div class="btn-row">${cancelar}<button class="primary" type="submit">Enviar link</button></div>
+        </form>` : `
+        <div class="list-row">
+          <div>Email<div class="sub">${h(c.email)}${c.emailConfirmado ? ' · confirmado ✓' : ' · não confirmado'}</div></div>
+          <button type="button" class="del-btn" data-action="editarConta" data-qual="email">Alterar</button>
+        </div>
+        ${c.emailConfirmado ? '' : `
+          <p class="hint">Confirme seu email para receber convites de grupos por email.</p>
+          <button class="secondary" type="button" data-action="confirmarMeuEmail">Confirmar meu email</button>`}`}
+    </div>
+
+    <div class="card">
+      <h3>Minha chave Pix</h3>
+      <div id="meu-pix">${meuPixHtml(meuPix)}</div>
+    </div>
+
+    <div class="card">
+      <h3>Acesso e segurança</h3>
+      ${EDITANDO_CONTA === 'senha' ? `
+        <form data-submit="salvarSenhaConta" novalidate>
+          <input type="email" autocomplete="username" value="${h(c.email)}" hidden>
+          ${c.temSenha ? campoSenhaAtual('conta-senha-atual', 'a troca') : ''}
+          <label for="conta-senha-nova">Nova senha</label>
+          <input type="password" id="conta-senha-nova" autocomplete="new-password">
+          <ul class="senha-regras" data-para="conta-senha-nova"></ul>
+          <label for="conta-senha-nova2">Repita a nova senha</label>
+          <input type="password" id="conta-senha-nova2" autocomplete="new-password">
+          ${c.temSenha ? '<button type="button" class="link-btn" data-action="esqueciSenhaAtual">Esqueci minha senha atual</button>' : ''}
+          <div class="btn-row">${cancelar}<button class="primary" type="submit">Salvar senha</button></div>
+        </form>` : `
+        <div class="list-row">
+          <div>Senha<div class="sub">${c.temSenha ? 'Definida' : 'Ainda não tem'}</div></div>
+          <button type="button" class="del-btn" data-action="editarConta" data-qual="senha">${c.temSenha ? 'Trocar senha' : 'Criar senha'}</button>
+        </div>`}
+      <div class="list-row">
+        <div>Conta Google<div class="sub">${c.google ? 'Ligada: ' + h(c.google) : 'Não ligada'}</div></div>
+        ${c.google
+          ? (c.temSenha ? '<button type="button" class="del-btn" data-action="desvincularGoogle">Desligar</button>' : '')
+          : '<button type="button" class="del-btn" data-action="vincularGoogle">Ligar</button>'}
+      </div>
+      ${c.google ? '' : '<p class="hint">Ligue sua conta Google para entrar com um toque, sem digitar senha.</p>'}
+    </div>
+
+    <div class="card">
+      <button class="secondary danger" type="button" data-action="logout" style="margin-top:0">Sair da conta neste aparelho</button>
+    </div>`;
+}
+ACTIONS.editarConta = el => { EDITANDO_CONTA = el.dataset.qual || ''; renderMeusGrupos(); };
+ACTIONS.salvarNomeConta = async form => {
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      const res = await Firebase.salvarNomeConta($('conta-nome-input').value);
+      if (res.atualizouAtual) { STATE.pessoa = res.nome; store.set(K.pessoa, res.nome); $('who-name').textContent = res.nome; }
+      EDITANDO_CONTA = '';
+      showToast(res.conflitos.length
+        ? 'Nome salvo, menos em ' + res.conflitos.join(', ') + ': lá já tem alguém com esse nome.'
+        : (res.grupos > 1 ? 'Nome atualizado nos seus ' + res.grupos + ' grupos!' : 'Nome atualizado!'), res.conflitos.length > 0);
+      renderMeusGrupos();
+    } catch (err) { onApiError(err); }
+  });
+};
+ACTIONS.salvarEmailConta = async form => {
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      const novo = await Firebase.trocarEmail($('conta-email-novo').value, $('conta-email-senha').value, location.origin + location.pathname);
+      EDITANDO_CONTA = '';
+      showToast('Link enviado para ' + novo + '. Toque nele para concluir a troca (confira o spam).');
+      renderMeusGrupos();
+    } catch (err) { if (err.code !== 'CANCELADO') onApiError(err); }
+  });
+};
+ACTIONS.salvarSenhaConta = async form => {
+  const nova = $('conta-senha-nova').value;
+  const erro = problemaSenha(nova, $('conta-senha-nova2').value);
+  if (erro) { showToast(erro, true); vibrate(60); return; }
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      await Firebase.trocarSenha($('conta-senha-atual') ? $('conta-senha-atual').value : '', nova);
+      EDITANDO_CONTA = '';
+      showToast('Senha alterada!');
+      renderMeusGrupos();
+    } catch (err) { if (err.code !== 'CANCELADO') onApiError(err); }
+  });
+};
+ACTIONS.esqueciSenhaAtual = async el => {
+  const email = Firebase.minhaConta().email;
+  await withBusy(el, async () => {
+    try { await Firebase.esqueciSenha(email); showToast('Enviamos um link para ' + email + ' para criar uma senha nova.'); }
+    catch (err) { onApiError(err); }
+  });
+};
+ACTIONS.vincularGoogle = async el => {
+  await withBusy(el, async () => {
+    try { await Firebase.vincularGoogle(); showToast('Conta Google ligada! Agora você pode entrar com ela.'); renderMeusGrupos(); }
+    catch (err) { if (err.code !== 'CANCELADO') onApiError(err); }
+  });
+};
+ACTIONS.desvincularGoogle = async el => {
+  if (!confirm('Desligar a conta Google? Você passa a entrar só com email e senha.')) return;
+  await withBusy(el, async () => {
+    try { await Firebase.desvincularGoogle(); showToast('Conta Google desligada.'); renderMeusGrupos(); }
+    catch (err) { onApiError(err); }
+  });
+};
 
 // ---------- Convites recebidos por email ----------
 let CONVITES_PENDENTES = [];
@@ -2244,19 +2368,6 @@ ACTIONS.salvarNomeGrupo = async form => {
       EDITANDO_NOME = '';
       showToast('Nome do grupo atualizado.');
       renderCasa();
-    } catch (err) { onApiError(err); }
-  });
-};
-ACTIONS.salvarMeuNome = async form => {
-  await withBusy(form.querySelector('button[type=submit]'), async () => {
-    try {
-      const res = await api('renomearMe', { nome: $('meu-nome-input').value });
-      STATE.pessoa = res.nome;
-      store.set(K.pessoa, res.nome);
-      $('who-name').textContent = res.nome;
-      EDITANDO_NOME = '';
-      showToast('Seu nome foi atualizado.');
-      setTimeout(renderCasa, 400);
     } catch (err) { onApiError(err); }
   });
 };
