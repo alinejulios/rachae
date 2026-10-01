@@ -233,7 +233,7 @@ export function montarHistorico(dbOriginal, grupoId, meUid, souDono) {
 
   const despesas = db.despesas.filter(d => d.grupoId === grupoId).sort(porDataDesc).slice(0, 30).map(d => ({
     row: d.id, id: d.id, acerto: !!d.acerto, data: dataBR(d.data), descricao: d.descricao, categoria: d.categoria, segmento: d.segmento,
-    grupo: grupo && grupo.nome, valor: reais(d.valor), pagoPor: nome(d.pagoPor), metodo: d.metodo, podeApagar: podeApagar(d),
+    grupo: grupo && grupo.nome, valor: reais(d.valorOriginal || d.valor), pagoPor: nome(d.pagoPor), metodo: d.metodo, podeApagar: podeApagar(d),
     valorFixo: d.valorFixo === true, automatica: !!d.automatica, serieId: d.serieId || null, mes: d.mes || null,
     encerradaEm: d.fixoAte || null
   }));
@@ -244,7 +244,7 @@ export function montarHistorico(dbOriginal, grupoId, meUid, souDono) {
     saldoTotal: reais(situacaoCompra(c, membrosG, db.pagamentos).saldoTotal), podeApagar: podeApagar(c)
   }));
   const compraPorId = Object.fromEntries(comprasGrupo.map(c => [c.id, c]));
-  const pagamentos = db.pagamentos.filter(p => compraPorId[p.compraId]).sort(porDataDesc).slice(0, 30).map(p => ({
+  const pagamentos = db.pagamentos.filter(p => compraPorId[p.compraId] && !p.virtual).sort(porDataDesc).slice(0, 30).map(p => ({
     id: p.id, data: dataBR(p.data), compraId: codigoCompra(p.compraId), descricao: compraPorId[p.compraId].descricao,
     pessoa: nome(p.pessoa), valor: reais(p.valor), podeApagar: souDono || p.pessoa === meUid,
     registradoPor: p.registradoPor && p.registradoPor !== p.pessoa ? nome(p.registradoPor) : null
@@ -310,10 +310,55 @@ export function expandirFixas(despesas, mesAtual = mesAtualISO(), horizonte = 12
   });
   return { lancadas, previstas };
 }
-/** db com os meses automáticos das contas fixas já somados às despesas. */
+/** db com os meses automáticos das contas fixas já somados às despesas e os acertos abatendo parcelas. */
 function comFixas(db) {
   const { lancadas, previstas } = expandirFixas(db.despesas || []);
-  return { db: { ...db, despesas: [...(db.despesas || []), ...lancadas] }, previstas };
+  return { db: acertosNasParcelas({ ...db, despesas: [...(db.despesas || []), ...lancadas] }), previstas };
+}
+
+/**
+ * Acerto de contas (de → para, referente ao mês M) também quita as parcelas que `de` deve
+ * a `para` (compras em que `para` é o comprador) vencidas em M. Nada é gravado: a parte do
+ * acerto que cobre parcelas vira pagamento calculado (`virtual`) e sai do valor do acerto,
+ * então o saldo total e o do mês continuam iguais — só as parcelas passam a aparecer pagas.
+ * Só abate a parcela de M quando as anteriores daquela compra já estão pagas (pagamentos
+ * abatem da mais antiga para a mais nova; assim cada mês continua quitando o próprio mês).
+ */
+function acertosNasParcelas(db) {
+  const acertos = (db.despesas || []).filter(d => d.acerto && d.valor > 0 && (d.participantes || []).length === 1);
+  if (!acertos.length || !(db.compras || []).length) return db;
+  const membrosPorGrupo = {};
+  const membrosDe = gid => membrosPorGrupo[gid] ||
+    (membrosPorGrupo[gid] = membrosDoGrupo((db.grupos || []).find(g => g.id === gid), db.membros || []));
+  const pagamentos = [...(db.pagamentos || [])];
+  const abatido = {};
+  const mesDe = d => d.mesRef || String(d.data || '').slice(0, 7);
+  acertos.slice().sort((a, b) => (mesDe(a) + a.data).localeCompare(mesDe(b) + b.data)).forEach(d => {
+    const de = d.pagoPor, para = d.participantes[0], mes = mesDe(d);
+    const membrosG = membrosDe(d.grupoId);
+    if (!membrosG.has(de) || !membrosG.has(para)) return;
+    let resta = d.valor;
+    db.compras.filter(c => c.grupoId === d.grupoId && c.comprador === para)
+      .sort((a, b) => String(a.data).localeCompare(String(b.data))).forEach(c => {
+        if (resta <= 0) return;
+        const parte = devidoPorPessoa(c, membrosG)[de] || 0;
+        if (!parte) return;
+        const pago = pagamentos.reduce((t, p) => t + (p.compraId === c.id && p.pessoa === de ? p.valor : 0), 0);
+        const parcelas = parcelasDaPessoa(c, parte, pago);
+        if (parcelas.some(p => p.mes < mes && p.aberto > 0)) return;
+        const v = Math.min(resta, parcelas.filter(p => p.mes === mes).reduce((t, p) => t + p.aberto, 0));
+        if (v <= 0) return;
+        pagamentos.push({ id: 'acerto:' + d.id + ':' + c.id, compraId: c.id, pessoa: de, valor: v, data: d.data, virtual: true });
+        resta -= v;
+      });
+    if (resta < d.valor) abatido[d.id] = d.valor - resta;
+  });
+  if (!Object.keys(abatido).length) return db;
+  return {
+    ...db,
+    pagamentos,
+    despesas: db.despesas.map(d => (abatido[d.id] ? { ...d, valor: d.valor - abatido[d.id], valorOriginal: d.valor } : d))
+  };
 }
 
 /**
