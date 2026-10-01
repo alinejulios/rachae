@@ -16,7 +16,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  doc, getDoc, getDocs, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, writeBatch, serverTimestamp
+  doc, getDoc, getDocs, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, writeBatch, serverTimestamp, query, where
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from '../firebase-config.js';
 import { normalizarChave } from './pix.js';
@@ -245,6 +245,45 @@ export const fecharConvite = () => tenta(async () => {
   try { localStorage.removeItem(CONVITE_KEY(CASA.id)); } catch (e) {}
 });
 
+// ------------------------------------------------------------------ convites por email
+// Cada convite por email é um código próprio, que só a conta com aquele email
+// consegue usar (regra do Firestore). Quem já tem conta vê o convite dentro do app.
+const emailOk = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e.length <= 120;
+/** Dono: cria um convite para um email. Devolve o código. */
+export const convidarPorEmail = email => tenta(async () => {
+  if (!souDono()) throw new ApiError('Só quem administra o grupo pode convidar.');
+  const e = String(email || '').trim().toLowerCase();
+  if (!emailOk(e)) throw new ApiError('Digite um email válido.');
+  if (DB.membros.some(m => String(m.email || '').toLowerCase() === e)) throw new ApiError('Essa pessoa já está no grupo.');
+  const eu = DB.membros.find(m => m.uid === usuarioAtual().uid);
+  const codigo = gerarCodigo();
+  await setDoc(doc(fs, 'convites', codigo), {
+    householdId: CASA.id, ativo: true, email: e, nomeGrupo: String(CASA.nome || 'Grupo').slice(0, 40),
+    convidadoPor: String((eu && eu.nome) || '').slice(0, 40), criadoEm: serverTimestamp()
+  });
+  return codigo;
+});
+/** Dono: convites por email ainda não usados deste grupo. */
+export const convitesPendentesDoGrupo = () => tenta(async () => {
+  if (!souDono()) return [];
+  const snap = await getDocs(query(collection(fs, 'convites'), where('householdId', '==', CASA.id), where('ativo', '==', true)));
+  return snap.docs.map(d => ({ codigo: d.id, ...d.data() })).filter(c => c.email);
+});
+/** Dono: cancela um convite por email. */
+export const cancelarConvite = codigo => tenta(async () => {
+  if (!souDono()) throw new ApiError('Só quem administra o grupo pode cancelar convites.');
+  await updateDoc(doc(fs, 'convites', codigo), { ativo: false });
+});
+/** Convites por email para a pessoa logada, de grupos em que ela ainda não está. */
+export const meusConvitesPendentes = () => tenta(async () => {
+  const u = usuarioAtual();
+  if (!u || !u.email) return [];
+  const snap = await getDocs(query(collection(fs, 'convites'), where('email', '==', u.email.toLowerCase()), where('ativo', '==', true)));
+  const { casas } = await lerPerfil(u.uid);
+  return snap.docs.map(d => ({ codigo: d.id, nomeGrupo: d.data().nomeGrupo || 'Grupo', convidadoPor: d.data().convidadoPor || '',
+    householdId: d.data().householdId })).filter(c => !casas.includes(c.householdId));
+});
+
 /** Morador: entra numa casa usando o código de convite. */
 export const entrarComConvite = (codigo, meuNome) => tenta(async () => {
   const u = usuarioAtual();
@@ -253,6 +292,10 @@ export const entrarComConvite = (codigo, meuNome) => tenta(async () => {
   if (cod.length < 8) throw new ApiError('Código de convite inválido.');
   const conv = await getDoc(doc(fs, 'convites', cod));
   if (!conv.exists() || !conv.data().ativo) throw new ApiError('Código de convite inválido ou já desativado.');
+  const paraEmail = conv.data().email || '';
+  if (paraEmail && paraEmail !== String(u.email || '').toLowerCase()) {
+    throw new ApiError('Este convite foi enviado para ' + paraEmail + '. Entre com a conta desse email para aceitar.');
+  }
   const hid = conv.data().householdId;
   const perfil = await lerPerfil(u.uid);
   // Já faz parte dessa casa? Só abre.
@@ -264,6 +307,8 @@ export const entrarComConvite = (codigo, meuNome) => tenta(async () => {
     b.set(doc(fs, 'users', u.uid), { casas: [...new Set([...perfil.casas, hid])].slice(0, 20), casaAtual: hid });
     await b.commit();
   }
+  // Convite por email é de uso único: some da lista de convites pendentes da pessoa
+  if (paraEmail) await updateDoc(doc(fs, 'convites', cod), { ativo: false, usadoPor: u.uid, usadoEm: serverTimestamp() }).catch(() => {});
   const casa = await carregarCasa(hid);
   if (!jaSouMembro && DB && DB.membros.some(m => m.uid !== u.uid && m.nome.toLowerCase() === nome.toLowerCase())) {
     const novoNome = (nome + ' ' + u.email[0].toUpperCase()).slice(0, 20);

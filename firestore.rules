@@ -49,14 +49,26 @@ service cloud.firestore {
     // ---------------------------------------------------------------- convites
     // O código (ID do documento) é o segredo: dá para LER um convite sabendo o
     // código, mas nunca LISTAR os convites.
+    // Convite por email: tem `email` (minúsculo) e só a conta com esse email entra com ele.
+    // A pessoa convidada consegue LISTAR os convites para o email dela (para ver dentro do
+    // app) e marcá-lo como usado; quem administra lista os convites do próprio grupo.
     match /convites/{codigo} {
+      function meuEmail() { return request.auth.token.email.lower(); }
       allow get: if signedIn();
-      allow list: if false;
+      allow list: if signedIn() && resource.data.get('email', '') == meuEmail();
+      allow list: if isOwner(resource.data.householdId);
       allow create: if isOwner(request.resource.data.householdId)
-        && request.resource.data.keys().hasOnly(['householdId', 'ativo', 'criadoEm'])
+        && request.resource.data.keys().hasOnly(['householdId', 'ativo', 'criadoEm', 'email', 'nomeGrupo', 'convidadoPor'])
         && request.resource.data.ativo is bool
+        && (!('email' in request.resource.data) || str(request.resource.data.email, 3, 120))
+        && (!('nomeGrupo' in request.resource.data) || str(request.resource.data.nomeGrupo, 0, 40))
+        && (!('convidadoPor' in request.resource.data) || str(request.resource.data.convidadoPor, 0, 40))
         && codigo.size() >= 8;
       allow update, delete: if isOwner(resource.data.householdId);
+      // Quem foi convidada(o) marca o convite como usado depois de entrar
+      allow update: if signedIn() && resource.data.get('email', '') == meuEmail()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ativo', 'usadoPor', 'usadoEm'])
+        && request.resource.data.ativo == false && request.resource.data.usadoPor == uid();
     }
 
     // ---------------------------------------------------------------- casa
@@ -98,6 +110,9 @@ service cloud.firestore {
               && exists(/databases/$(database)/documents/convites/$(request.resource.data.convite))
               && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.householdId == hid
               && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.ativo == true
+              // convite por email: só a conta daquele email
+              && (get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.get('email', '') == ''
+                  || get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.email == request.auth.token.email.lower())
             )
           );
         // Cada um só troca o próprio nome e a própria chave Pix (visível para o grupo, para receber)

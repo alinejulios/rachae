@@ -158,8 +158,33 @@ async function init() {
 // Depois do login: entra no app se já tem casa, senão pede convite / criar casa
 function chaveGrupo() { return K.grupo + '_' + ((STATE.casa && STATE.casa.id) || ''); }
 
+/** Nome para entrar num grupo novo: o do grupo atual, o da conta, ou o começo do email. */
+function nomeParaEntrar(user) {
+  const candidatos = [STATE.pessoa, user.displayName, (user.email || '').split('@')[0].replace(/[^\p{L} ]/gu, ' ').trim()];
+  return candidatos.find(n => n && /^[\p{L}][\p{L} .'-]{0,39}$/u.test(n.trim())) || 'Convidado';
+}
+
 async function abrirCasa(user, hid) {
   mostrarPasso('login-step-loading');
+  // Abriu um link de convite: entra nesse grupo (vale também para quem já tem conta e outros grupos)
+  if (CONVITE_URL && !hid) {
+    const codigo = CONVITE_URL;
+    try {
+      const casa = await Firebase.entrarComConvite(codigo, nomeParaEntrar(user));
+      CONVITE_URL = '';
+      STATE.casa = casa;
+      STATE.config = await api('config');
+      STATE.grupoAtual = null;
+      enterApp(casa.meuNome);
+      showToast('Você entrou em ' + casa.nome + '!');
+      return;
+    } catch (err) {
+      const semGrupo = !(await Firebase.minhasCasas().catch(() => [])).length;
+      if (semGrupo) { /* segue para a tela "Falta entrar num grupo", com o erro no código */ }
+      else { CONVITE_URL = ''; showToast(err.message, true); }
+      if (semGrupo) hint('convite-hint', err.message, 'error');
+    }
+  }
   const casa = await Firebase.carregarCasa(hid);
   if (!casa) {
     STATE.pessoa = null;
@@ -170,8 +195,7 @@ async function abrirCasa(user, hid) {
     $('sem-casa-nome').textContent = user.displayName || user.email;
     if (CONVITE_URL) $('convite-codigo').value = CONVITE_URL;
     mostrarPasso('step-sem-casa');
-    // Chegou pelo link de convite e acabou de criar a conta: entra direto
-    if (CONVITE_URL && user.displayName) ACTIONS.submit_form_convite($('form-convite'));
+    renderConvitesPendentes('sem-casa-convites');
     return;
   }
   STATE.casa = casa;
@@ -186,6 +210,7 @@ function irParaLogin() {
   $('screen-login').classList.remove('hidden');
   if (CONVITE_URL) {
     $('conta-convite').value = CONVITE_URL;
+    document.querySelectorAll('.convite-aviso').forEach(p => p.classList.remove('hidden'));
     mostrarPasso('form-conta');
   } else {
     mostrarPasso('form-entrar');
@@ -227,6 +252,8 @@ ACTIONS.submit_form_entrar = async form => {
     try {
       const user = await Firebase.entrar(email, senha);
       hint('entrar-hint', '');
+      const codigo = $('conta-convite').value.trim().toUpperCase();
+      if (codigo && !CONVITE_URL) CONVITE_URL = codigo;
       $('entrar-senha').value = '';
       await abrirCasa(user);
     } catch (err) { hint('entrar-hint', err.message, 'error'); vibrate(80); }
@@ -305,6 +332,8 @@ function enterApp(nome) {
   $('who-name').textContent = nome;
   $('who-casa').textContent = (STATE.casa && STATE.casa.nome) || 'Rachaê';
   loadGrupos();
+  // Convites por email para outros grupos aparecem no Início
+  carregarConvitesPendentes().then(() => { if ($('convites-pendentes')) $('convites-pendentes').innerHTML = convitesPendentesHtml(CONVITES_PENDENTES); });
 }
 ACTIONS.logout = async () => {
   if (!confirm('Sair deste aparelho?')) return;
@@ -523,6 +552,7 @@ function renderDashboard(d) {
 
   el.innerHTML = `
     <div id="install-card"></div>
+    <div id="convites-pendentes">${convitesPendentesHtml(CONVITES_PENDENTES)}</div>
     <div class="card hero">
       <div class="label">Seu saldo geral${h(grupoLabel)}</div>
       <div class="value ${statusClass}">${fmtBRL(Math.abs(p.saldoGeral))}</div>
@@ -1784,6 +1814,15 @@ async function renderCasa() {
         </div>`
       : `<p class="hint">Nenhum convite aberto neste aparelho.</p>
          <button class="primary" type="button" data-action="novoConvite">Gerar código de convite</button>`}
+      <form data-submit="convidarPorEmail" novalidate style="margin-top:18px">
+        <label for="convite-email">Convidar por email</label>
+        <input type="email" id="convite-email" placeholder="email@exemplo.com" autocomplete="off" autocapitalize="off"
+               autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="send">
+        <button class="secondary" type="submit">Enviar convite</button>
+        <p class="hint">Serve para quem já usa o Rachaê (o convite aparece no app da pessoa) e para quem ainda não tem conta
+          (abre seu app de email com o link). Só a conta com esse email consegue usar o convite.</p>
+      </form>
+      <div id="convites-email"></div>
     </div>` : ''}
 
     <div class="card">
@@ -1824,6 +1863,7 @@ async function renderCasa() {
   `;
   if (GRUPO_EDITANDO !== null) renderGrupoForm(grupos.find(g => g.id === GRUPO_EDITANDO) || null);
   if (EDITANDO_PIX) { ajustarCampoChave(); ACTIONS.previaNomeQR(); }
+  if (dono) renderConvitesEmail();
 }
 
 // =================================================================== Meus grupos e conta (vale para tudo)
@@ -1831,10 +1871,11 @@ async function renderMeusGrupos() {
   const el = $('tab-grupos');
   const casa = Firebase.casaAtual();
   const eu = Firebase.usuarioAtual();
-  const casas = await Firebase.minhasCasas().catch(() => []);
+  const [casas, convites] = await Promise.all([Firebase.minhasCasas().catch(() => []), carregarConvitesPendentes()]);
   el.innerHTML = `
     <h2 class="page-title">Meus grupos</h2>
     <p class="page-sub">Toque num grupo para abrir. Os ajustes de cada grupo ficam na engrenagem ⚙️, dentro dele.</p>
+    ${convitesPendentesHtml(convites)}
     <div class="card">
       ${casas.map(c => `
         <div class="list-row">
@@ -1848,8 +1889,10 @@ async function renderMeusGrupos() {
       ${OUTRA_CASA === null ? `
         <div class="btn-row">
           <button class="secondary" type="button" data-action="outraCasa" data-modo="criar">+ Criar grupo</button>
-          <button class="secondary" type="button" data-action="outraCasa" data-modo="convite">Entrar com convite</button>
-        </div>` : ''}
+          <button class="secondary" type="button" data-action="outraCasa" data-modo="convite">Tenho um código</button>
+        </div>
+        <p class="hint">Recebeu um código ou link de convite de outro grupo? Toque em "Tenho um código" para entrar nele
+          sem sair dos seus grupos.</p>` : ''}
     </div>
 
     <h2 class="page-title" style="margin-top:22px">Minha conta</h2>
@@ -1861,6 +1904,39 @@ async function renderMeusGrupos() {
   `;
   if (OUTRA_CASA !== null) renderOutraCasaForm();
 }
+
+// ---------- Convites recebidos por email ----------
+let CONVITES_PENDENTES = [];
+async function carregarConvitesPendentes() {
+  CONVITES_PENDENTES = await Firebase.meusConvitesPendentes().catch(() => []);
+  return CONVITES_PENDENTES;
+}
+function convitesPendentesHtml(lista) {
+  if (!lista.length) return '';
+  return `<div class="card convites-card">
+    <h3>📩 ${lista.length > 1 ? 'Convites para você' : 'Convite para você'}</h3>
+    ${lista.map(c => `
+      <div class="list-row">
+        <div>${h(c.nomeGrupo)}<div class="sub">${c.convidadoPor ? 'Convite de ' + h(c.convidadoPor) : 'Convite por email'}</div></div>
+        <button type="button" class="secondary" style="width:auto;margin:0;padding:8px 16px;min-height:40px" data-action="aceitarConvite"
+          data-codigo="${h(c.codigo)}" data-nome="${h(c.nomeGrupo)}">Entrar</button>
+      </div>`).join('')}
+  </div>`;
+}
+async function renderConvitesPendentes(containerId) {
+  const lista = await carregarConvitesPendentes();
+  const el = $(containerId);
+  if (el) el.innerHTML = convitesPendentesHtml(lista);
+}
+ACTIONS.aceitarConvite = async el => {
+  const user = Firebase.usuarioAtual();
+  await withBusy(el, async () => {
+    try {
+      await abrirOutraCasa(() => Firebase.entrarComConvite(el.dataset.codigo, nomeParaEntrar(user)), 'Você entrou em ' + el.dataset.nome + '!');
+      CONVITES_PENDENTES = CONVITES_PENDENTES.filter(c => c.codigo !== el.dataset.codigo);
+    } catch (err) { onApiError(err); }
+  });
+};
 
 // ---------- Várias casas ----------
 let OUTRA_CASA = null; // null | 'criar' | 'convite'
@@ -1932,8 +2008,7 @@ ACTIONS.entrarOutraCasa = async form => {
   const user = Firebase.usuarioAtual();
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      await abrirOutraCasa(() => Firebase.entrarComConvite(codigo, STATE.pessoa || user.displayName || user.email.split('@')[0]),
-        'Você entrou no grupo!');
+      await abrirOutraCasa(() => Firebase.entrarComConvite(codigo, nomeParaEntrar(user)), 'Você entrou no grupo!');
     } catch (err) { onApiError(err); }
   });
 };
@@ -2057,6 +2132,37 @@ ACTIONS.novoConvite = async () => {
 ACTIONS.fecharConvite = async () => {
   if (!confirm('Fechar os convites? Ninguém novo consegue entrar até você gerar outro código.')) return;
   try { await Firebase.fecharConvite(); renderCasa(); showToast('Convites fechados.'); } catch (err) { onApiError(err); }
+};
+async function renderConvitesEmail() {
+  const el = $('convites-email');
+  if (!el) return;
+  const lista = await Firebase.convitesPendentesDoGrupo().catch(() => []);
+  el.innerHTML = lista.length ? `<span class="field-label">Convites por email ainda não aceitos</span>
+    ${lista.map(c => `<div class="list-row"><div>${h(c.email)}</div>
+      <button type="button" class="del-btn" data-action="cancelarConvite" data-codigo="${h(c.codigo)}" data-email="${h(c.email)}">Cancelar</button></div>`).join('')}` : '';
+}
+ACTIONS.convidarPorEmail = async form => {
+  const email = $('convite-email').value.trim();
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      const codigo = await Firebase.convidarPorEmail(email);
+      const casa = Firebase.casaAtual();
+      const link = location.origin + location.pathname + '?convite=' + codigo;
+      const assunto = 'Convite para o grupo ' + casa.nome + ' no Rachaê';
+      const corpo = 'Oi! Quero dividir as contas com você no grupo "' + casa.nome + '" do Rachaê.\n\n' +
+        'Abra o link para entrar: ' + link + '\n\nSe você já usa o Rachaê, o convite também aparece no app ' +
+        '(entre com este email: ' + email.toLowerCase() + '). Código: ' + codigo;
+      $('convite-email').value = '';
+      showToast('Convite criado! Abrindo seu email...');
+      location.href = 'mailto:' + encodeURIComponent(email) + '?subject=' + encodeURIComponent(assunto) + '&body=' + encodeURIComponent(corpo);
+      renderConvitesEmail();
+    } catch (err) { onApiError(err); }
+  });
+};
+ACTIONS.cancelarConvite = async el => {
+  if (!confirm('Cancelar o convite para ' + el.dataset.email + '?')) return;
+  try { await Firebase.cancelarConvite(el.dataset.codigo); showToast('Convite cancelado.'); renderConvitesEmail(); }
+  catch (err) { onApiError(err); }
 };
 ACTIONS.compartilharConvite = async el => {
   const link = el.dataset.link;
