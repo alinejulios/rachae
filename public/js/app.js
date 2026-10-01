@@ -113,7 +113,7 @@ ACTIONS.reload = () => location.reload();
 
 // =================================================================== Init / Login
 function mostrarPasso(id) {
-  ['login-step-loading', 'form-entrar', 'form-conta', 'form-senha', 'step-sem-casa', 'login-error']
+  ['login-step-loading', 'form-entrar', 'form-conta', 'form-senha', 'form-vincular', 'form-criar-senha', 'step-verificar', 'step-sem-casa', 'login-error']
     .forEach(x => $(x).classList.toggle('hidden', x !== id));
 }
 function mostrarErroInicial(msg) {
@@ -127,10 +127,11 @@ function hint(id, msg, tipo) {
 }
 
 async function init() {
-  ['form-entrar', 'form-conta', 'form-senha', 'form-convite', 'form-nova-casa'].forEach(id => {
+  ['form-entrar', 'form-conta', 'form-senha', 'form-vincular', 'form-criar-senha', 'form-convite', 'form-nova-casa'].forEach(id => {
     $(id).dataset.submit = 'submit_' + id.replace(/-/g, '_');
   });
   lerConviteDaUrl();
+  prepararRegrasSenha();
   updateOnlineStatus();
   window.addEventListener('online', updateOnlineStatus);
   window.addEventListener('offline', updateOnlineStatus);
@@ -147,8 +148,11 @@ async function init() {
     return;
   }
   try {
+    // Voltando da página do Google (quando o navegador bloqueou a janela)
+    let erroGoogle = null;
+    try { await Firebase.resultadoGoogle(); } catch (e) { erroGoogle = e; }
     const user = await Firebase.aguardarSessao();
-    if (!user) { irParaLogin(); return; }
+    if (!user) { irParaLogin(); if (erroGoogle) tratarErroGoogle(erroGoogle, 'entrar-hint'); return; }
     await abrirCasa(user);
   } catch (err) {
     mostrarErroInicial(err.message);
@@ -164,8 +168,148 @@ function nomeParaEntrar(user) {
   return candidatos.find(n => n && /^[\p{L}][\p{L} .'-]{0,39}$/u.test(n.trim())) || 'Convidado';
 }
 
+// ------------------------------------------------------------------ senha forte
+const REGRAS_SENHA = [
+  ['8 caracteres ou mais', s => s.length >= 8],
+  ['uma letra maiúscula', s => /\p{Lu}/u.test(s)],
+  ['uma letra minúscula', s => /\p{Ll}/u.test(s)],
+  ['um número', s => /\d/.test(s)],
+  ['um símbolo (!@#$%…)', s => /[^\p{L}\d\s]/u.test(s)]
+];
+/** Mensagem do primeiro problema da senha nova (ou null se está boa e as duas são iguais). */
+function problemaSenha(senha, repetida) {
+  const falta = REGRAS_SENHA.filter(([, ok]) => !ok(senha)).map(([txt]) => txt);
+  if (falta.length) return 'A senha precisa ter: ' + falta.join(', ') + '.';
+  if (senha !== repetida) return 'As duas senhas não são iguais. Digite a mesma senha nos dois campos.';
+  return null;
+}
+// Lista de regras que vai ficando verde enquanto a pessoa digita
+function desenharRegras(ul) {
+  const senha = $(ul.dataset.para).value, repetida = $(ul.dataset.para + '2').value;
+  const itens = REGRAS_SENHA.map(([txt, ok]) => [txt, ok(senha)])
+    .concat([['as duas senhas iguais', !!senha && senha === repetida]]);
+  ul.innerHTML = itens.map(([txt, ok]) => `<li class="${ok ? 'ok' : ''}">${ok ? '✓' : '○'} ${h(txt)}</li>`).join('');
+}
+function prepararRegrasSenha() {
+  document.querySelectorAll('.senha-regras').forEach(ul => {
+    desenharRegras(ul);
+    [ul.dataset.para, ul.dataset.para + '2'].forEach(id => $(id).addEventListener('input', () => desenharRegras(ul)));
+  });
+}
+function limparSenhas(...ids) {
+  ids.forEach(id => { $(id).value = ''; $(id + '2').value = ''; });
+  document.querySelectorAll('.senha-regras').forEach(desenharRegras);
+}
+
+// ------------------------------------------------------------------ login com Google
+function tratarErroGoogle(err, hintId) {
+  if (err.code === 'CANCELADO') { hint(hintId, ''); return; }
+  if (err.code === 'auth/account-exists-with-different-credential' && Firebase.googlePendente()) { mostrarVincular(); return; }
+  hint(hintId, err.message, 'error');
+  vibrate(80);
+}
+ACTIONS.entrarGoogle = async el => {
+  const hintId = el.closest('form').id === 'form-conta' ? 'conta-hint' : 'entrar-hint';
+  const codigo = $('conta-convite').value.trim().toUpperCase();
+  if (codigo && !CONVITE_URL) CONVITE_URL = codigo;
+  hint(hintId, '');
+  // Sem withBusy: ele troca o texto do botão e apagaria o logo do Google
+  el.disabled = true;
+  try {
+    const user = await Firebase.entrarComGoogle();
+    if (user) await abrirCasa(user); // null = foi para a página do Google e volta pelo init()
+  } catch (err) { tratarErroGoogle(err, hintId); }
+  finally { el.disabled = false; }
+};
+function mostrarVincular() {
+  $('vincular-email').textContent = Firebase.googlePendente();
+  ['entrar-email', 'senha-email'].forEach(id => { $(id).value = Firebase.googlePendente(); });
+  $('vincular-senha').value = '';
+  hint('vincular-hint', '');
+  mostrarPasso('form-vincular');
+}
+ACTIONS.cancelarVinculo = () => { Firebase.cancelarGooglePendente(); mostrarPasso('form-entrar'); };
+ACTIONS.submit_form_vincular = async form => {
+  const senha = $('vincular-senha').value;
+  if (!senha) { hint('vincular-hint', 'Digite a senha.', 'error'); return; }
+  hint('vincular-hint', 'Entrando...');
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      const user = await Firebase.entrarEVincularGoogle(Firebase.googlePendente(), senha);
+      $('vincular-senha').value = '';
+      hint('vincular-hint', '');
+      showToast('Pronto! Agora você também entra com o Google.');
+      await abrirCasa(user);
+    } catch (err) { hint('vincular-hint', err.message, 'error'); vibrate(80); }
+  });
+};
+function mostrarCriarSenha(user) {
+  document.body.classList.add('on-login');
+  $('screen-app').classList.add('hidden');
+  $('screen-login').classList.remove('hidden');
+  $('criar-senha-email').textContent = user.email;
+  $('criar-senha-usuario').value = user.email;
+  hint('criar-senha-hint', '');
+  mostrarPasso('form-criar-senha');
+}
+ACTIONS.submit_form_criar_senha = async form => {
+  const erro = problemaSenha($('criar-senha').value, $('criar-senha2').value);
+  if (erro) { hint('criar-senha-hint', erro, 'error'); vibrate(60); return; }
+  hint('criar-senha-hint', 'Salvando...');
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      const user = await Firebase.criarSenha($('criar-senha').value);
+      limparSenhas('criar-senha');
+      hint('criar-senha-hint', '');
+      showToast('Senha criada!');
+      await abrirCasa(user);
+    } catch (err) { hint('criar-senha-hint', err.message, 'error'); vibrate(80); }
+  });
+};
+
+// Link do email de confirmação volta para o app (com o convite, se houver)
+const linkDeVolta = () => location.origin + location.pathname + (CONVITE_URL ? '?convite=' + encodeURIComponent(CONVITE_URL) : '');
+function mostrarConfirmacaoEmail(user) {
+  document.body.classList.add('on-login');
+  $('screen-app').classList.add('hidden');
+  $('screen-login').classList.remove('hidden');
+  $('verificar-email').textContent = user.email;
+  mostrarPasso('step-verificar');
+}
+ACTIONS.jaConfirmei = async el => {
+  await withBusy(el, async () => {
+    try {
+      if (await Firebase.recarregarConfirmacao()) { hint('verificar-hint', ''); await abrirCasa(Firebase.usuarioAtual()); return; }
+      hint('verificar-hint', 'Ainda não aparece como confirmado. Toque no link do email e tente de novo.', 'warn');
+    } catch (err) { hint('verificar-hint', err.message, 'error'); }
+  });
+};
+ACTIONS.reenviarConfirmacao = async el => {
+  await withBusy(el, async () => {
+    try { await Firebase.enviarConfirmacaoEmail(linkDeVolta()); hint('verificar-hint', 'Email reenviado! Pode levar alguns minutos.', 'ok'); }
+    catch (err) { hint('verificar-hint', err.message, 'error'); }
+  });
+};
+// Contas antigas: confirmação opcional, pelo Perfil (necessária para convites por email)
+ACTIONS.confirmarMeuEmail = async el => {
+  await withBusy(el, async () => {
+    try {
+      if (await Firebase.recarregarConfirmacao()) { showToast('Email confirmado!'); renderMeusGrupos(); return; }
+      await Firebase.enviarConfirmacaoEmail(linkDeVolta());
+      showToast('Enviamos um link para ' + Firebase.usuarioAtual().email + '. Depois de tocar nele, volte aqui.');
+    } catch (err) { onApiError(err); }
+  });
+};
+
 async function abrirCasa(user, hid) {
   mostrarPasso('login-step-loading');
+  if (Firebase.precisaConfirmarEmail(user)) {
+    // Talvez já tenha confirmado em outra aba: relê antes de bloquear
+    if (!(await Firebase.recarregarConfirmacao().catch(() => false))) { mostrarConfirmacaoEmail(user); return; }
+    user = Firebase.usuarioAtual();
+  }
+  // Conta sem senha (entrou pelo Google): cria uma antes de seguir
+  if (!Firebase.temSenha(user)) { mostrarCriarSenha(user); return; }
   // Abriu um link de convite: entra nesse grupo (vale também para quem já tem conta e outros grupos)
   if (CONVITE_URL && !hid) {
     const codigo = CONVITE_URL;
@@ -267,15 +411,15 @@ ACTIONS.submit_form_conta = async form => {
   const convite = $('conta-convite').value.trim().toUpperCase();
   const erro = !/^[\p{L}][\p{L} .'-]{0,39}$/u.test(nome) ? 'Digite seu nome (até 40 letras, sem números).'
     : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? 'Digite um email válido.'
-    : senha.length < 8 ? 'A senha precisa ter pelo menos 8 caracteres.' : null;
+    : problemaSenha(senha, $('conta-senha2').value);
   if (erro) { hint('conta-hint', erro, 'error'); vibrate(60); return; }
   hint('conta-hint', 'Criando conta...');
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      const user = await Firebase.criarConta(nome, email, senha);
-      $('conta-senha').value = '';
-      hint('conta-hint', '');
       if (convite) CONVITE_URL = convite;
+      const user = await Firebase.criarConta(nome, email, senha, linkDeVolta());
+      limparSenhas('conta-senha');
+      hint('conta-hint', '');
       await abrirCasa(user);
     } catch (err) { hint('conta-hint', err.message, 'error'); vibrate(80); }
   });
@@ -1897,7 +2041,10 @@ async function renderMeusGrupos() {
 
     <h2 class="page-title" style="margin-top:22px">Minha conta</h2>
     <div class="card">
-      <div class="list-row"><div>Email<div class="sub">${h(eu ? eu.email : '')}</div></div></div>
+      <div class="list-row"><div>Email<div class="sub">${h(eu ? eu.email : '')}${Firebase.emailConfirmado() ? ' · confirmado ✓' : ' · não confirmado'}</div></div></div>
+      ${Firebase.emailConfirmado() ? '' : `
+        <p class="hint">Confirme seu email para receber convites de grupos por email.</p>
+        <button class="secondary" type="button" data-action="confirmarMeuEmail">Confirmar meu email</button>`}
       <p class="hint">Seu nome pode ser diferente em cada grupo: mude nos ajustes ⚙️ de cada um.</p>
       <button class="secondary danger" type="button" data-action="logout">Sair da conta neste aparelho</button>
     </div>

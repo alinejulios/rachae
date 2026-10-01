@@ -54,6 +54,13 @@ No plano Spark não existe Cloud Functions, então:
 3. Aba **Configurações > Domínios autorizados** → **Adicionar domínio** → `apprachae.vercel.app`
    (o `localhost` já vem na lista).
 4. Opcional: **Modelos** (templates) → **Redefinição de senha** → idioma português.
+5. **Login com Google:** **Método de login** → **Adicionar novo provedor** → **Google** → ativar,
+   escolher o email de suporte → Salvar. Em **Configurações > Contas de usuário** deixe
+   **"Vincular contas que usam o mesmo e-mail"** (uma conta por email): assim o Google entra na
+   mesma conta (mesmo uid, mesmos dados) de quem já se cadastrou com senha.
+6. Opcional: **Configurações > Política de senha** → exigir maiúscula, minúscula, número e símbolo,
+   mínimo 8 (o app já valida isso; a política reforça no servidor). **Não** marque "forçar
+   atualização no login", senão contas antigas com senha fraca deixam de entrar.
 
 ### 3. Criar o banco e publicar as regras
 1. Menu **Criação > Firestore Database** → **Criar banco de dados**.

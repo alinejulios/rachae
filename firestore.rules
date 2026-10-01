@@ -53,7 +53,8 @@ service cloud.firestore {
     // A pessoa convidada consegue LISTAR os convites para o email dela (para ver dentro do
     // app) e marcá-lo como usado; quem administra lista os convites do próprio grupo.
     match /convites/{codigo} {
-      function meuEmail() { return request.auth.token.email.lower(); }
+      // Só email confirmado: sem isso, quem criasse conta com o email de outra pessoa veria o convite dela
+      function meuEmail() { return request.auth.token.email_verified == true ? request.auth.token.email.lower() : '(email não confirmado)'; }
       allow get: if signedIn();
       allow list: if signedIn() && resource.data.get('email', '') == meuEmail();
       allow list: if isOwner(resource.data.householdId);
@@ -112,7 +113,8 @@ service cloud.firestore {
               && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.ativo == true
               // convite por email: só a conta daquele email
               && (get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.get('email', '') == ''
-                  || get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.email == request.auth.token.email.lower())
+                  || (request.auth.token.email_verified == true
+                      && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.email == request.auth.token.email.lower()))
             )
           );
         // Cada um só troca o próprio nome e a própria chave Pix (visível para o grupo, para receber)

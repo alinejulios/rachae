@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://www.gstatic.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebaseinstallations.googleapis.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; frame-src https://rachae-7047f.firebaseapp.com https://accounts.google.com; connect-src 'self' https://www.gstatic.com https://apis.google.com https://www.googleapis.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebaseinstallations.googleapis.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Rachaê</title>
 <meta name="description" content="Divisão de contas em grupo">
@@ -42,9 +42,13 @@
 
     <!-- Entrar -->
     <form id="form-entrar" class="login-step hidden" novalidate>
-      <p>Entre com seu email e senha.</p>
+      <p>Entre com sua conta Google ou com email e senha.</p>
       <p class="hint ok convite-aviso hidden">📩 Você abriu um convite: ao entrar, você vai direto para o grupo dele
         (seus outros grupos continuam no Perfil).</p>
+      <button class="google-btn" type="button" data-action="entrarGoogle">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        Continuar com Google</button>
+      <div class="ou"><span>ou</span></div>
       <label for="entrar-email" class="field-label">Email</label>
       <input type="email" id="entrar-email" placeholder="seuemail@exemplo.com" autocomplete="username"
              autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="next">
@@ -63,14 +67,21 @@
       <p>Crie sua conta. Depois você entra no grupo com o código de convite.</p>
       <p class="hint ok convite-aviso hidden">📩 Você abriu um convite. Ao criar a conta, já entra no grupo.
         Já tem conta? Toque em "Já tenho conta" lá embaixo: ao entrar, você vai direto para o grupo do convite.</p>
+      <button class="google-btn" type="button" data-action="entrarGoogle">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        Criar conta com Google</button>
+      <div class="ou"><span>ou</span></div>
       <label for="conta-nome" class="field-label">Seu nome (como vai aparecer para o grupo)</label>
       <input type="text" id="conta-nome" maxlength="40" placeholder="Ex.: Aline"
              autocomplete="given-name" autocapitalize="words" enterkeyhint="next">
       <label for="conta-email" class="field-label">Email</label>
       <input type="email" id="conta-email" placeholder="seuemail@exemplo.com" autocomplete="username"
              autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="next">
-      <label for="conta-senha" class="field-label">Senha (mínimo 8 caracteres)</label>
-      <input type="password" id="conta-senha" autocomplete="new-password" minlength="8" enterkeyhint="next">
+      <label for="conta-senha" class="field-label">Senha</label>
+      <input type="password" id="conta-senha" class="senha-nova" autocomplete="new-password" minlength="8" enterkeyhint="next" aria-describedby="conta-regras">
+      <ul class="senha-regras" id="conta-regras" data-para="conta-senha"></ul>
+      <label for="conta-senha2" class="field-label">Repita a senha</label>
+      <input type="password" id="conta-senha2" class="senha-repetir" autocomplete="new-password" enterkeyhint="next">
       <label for="conta-convite" class="field-label">Código de convite <span class="opcional">(se você recebeu um)</span></label>
       <input type="text" id="conta-convite" placeholder="ABCD234567" maxlength="20"
              autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="go">
@@ -93,6 +104,52 @@
         <button type="button" class="link-btn" data-action="irPara" data-step="form-entrar">Voltar</button>
       </div>
     </form>
+
+    <!-- Entrou pelo Google num email que já tinha conta com senha: liga as duas -->
+    <form id="form-vincular" class="login-step hidden" novalidate>
+      <p>🔗 <strong id="vincular-email"></strong> já tem conta no Rachaê.</p>
+      <p class="hint" style="margin:-12px 0 18px;text-align:center">Digite a senha dessa conta uma vez para ligá-la ao Google.
+        Seus grupos e despesas continuam os mesmos; nas próximas vezes, basta o botão do Google.</p>
+      <label for="vincular-senha" class="field-label">Senha</label>
+      <input type="password" id="vincular-senha" autocomplete="current-password" enterkeyhint="go">
+      <button class="primary" type="submit">Entrar e ligar ao Google</button>
+      <p class="hint" id="vincular-hint" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="irPara" data-step="form-senha">Esqueci a senha</button>
+        <button type="button" class="link-btn" data-action="cancelarVinculo">Voltar</button>
+      </div>
+    </form>
+
+    <!-- Conta sem senha (criada pelo Google): toda conta precisa de uma -->
+    <form id="form-criar-senha" class="login-step hidden" novalidate>
+      <p>🔒 Crie uma senha para sua conta.</p>
+      <p class="hint" style="margin:-12px 0 18px;text-align:center">Você continua entrando com o Google;
+        a senha é uma segunda forma de acessar <strong id="criar-senha-email"></strong>.</p>
+      <input type="email" id="criar-senha-usuario" autocomplete="username" hidden>
+      <label for="criar-senha" class="field-label">Senha</label>
+      <input type="password" id="criar-senha" class="senha-nova" autocomplete="new-password" enterkeyhint="next" aria-describedby="criar-regras">
+      <ul class="senha-regras" id="criar-regras" data-para="criar-senha"></ul>
+      <label for="criar-senha2" class="field-label">Repita a senha</label>
+      <input type="password" id="criar-senha2" class="senha-repetir" autocomplete="new-password" enterkeyhint="go">
+      <button class="primary" type="submit">Salvar senha</button>
+      <p class="hint" id="criar-senha-hint" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="logout">Usar outra conta</button>
+      </div>
+    </form>
+
+    <!-- Confirmar email (contas novas) -->
+    <div id="step-verificar" class="login-step hidden">
+      <p>📧 Falta confirmar seu email.</p>
+      <p class="hint" style="margin:-12px 0 18px;text-align:center">Enviamos um link para <strong id="verificar-email"></strong>.
+        Abra o email (confira o spam e a aba Promoções), toque no link e volte aqui.</p>
+      <button class="primary" type="button" data-action="jaConfirmei">Já confirmei</button>
+      <button class="secondary" type="button" data-action="reenviarConfirmacao">Reenviar email</button>
+      <p class="hint" id="verificar-hint" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="logout">Usar outro email</button>
+      </div>
+    </div>
 
     <!-- Logado, mas ainda sem grupo -->
     <div id="step-sem-casa" class="login-step hidden">

@@ -12,7 +12,9 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
-  sendPasswordResetEmail, signOut, updateProfile
+  sendPasswordResetEmail, signOut, updateProfile, sendEmailVerification,
+  GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, linkWithCredential,
+  reauthenticateWithPopup, EmailAuthProvider, updatePassword
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
@@ -64,6 +66,10 @@ const ERROS = {
   'auth/missing-email': 'Digite seu email.',
   'auth/unauthorized-continue-uri': 'Este endereço não está autorizado no Firebase (Authentication > Configurações > Domínios autorizados).',
   'auth/unauthorized-domain': 'Este endereço não está autorizado no Firebase (Authentication > Configurações > Domínios autorizados).',
+  'auth/popup-blocked': 'O navegador bloqueou a janela do Google. Permita pop-ups para este site e tente de novo.',
+  'auth/requires-recent-login': 'Por segurança, entre de novo e tente outra vez.',
+  'auth/credential-already-in-use': 'Essa conta Google já está ligada a outra conta do Rachaê.',
+  'auth/account-exists-with-different-credential': 'Esse email já tem conta com senha. Entre com a senha para ligar o Google a ela.',
   'permission-denied': 'Sem permissão para isso.',
   'unavailable': 'Sem conexão com o servidor. Tente de novo.'
 };
@@ -96,11 +102,113 @@ export const entrar = (email, senha) => tenta(async () => {
   exigirConfig();
   return (await signInWithEmailAndPassword(auth, email.trim(), senha)).user;
 });
-export const criarConta = (nome, email, senha) => tenta(async () => {
+export const criarConta = (nome, email, senha, continuar = location.origin + '/') => tenta(async () => {
   exigirConfig();
   const { user } = await createUserWithEmailAndPassword(auth, email.trim(), senha);
   await updateProfile(user, { displayName: nome });
+  await sendEmailVerification(user, { url: continuar }).catch(() => {}); // dá para reenviar depois
   return user;
+});
+
+// ------------------------------------------------------------------ login com Google
+// Mesmo email já com conta de senha: o Firebase (uma conta por email) entra na
+// MESMA conta (mesmo uid, mesmos dados). Se ele não conseguir ligar sozinho
+// (email que não é Gmail), devolve 'auth/account-exists-with-different-credential':
+// guardamos a credencial do Google, a pessoa digita a senha uma vez e ligamos as duas.
+let GOOGLE_PENDENTE = null; // { email, credencial }
+function provedorGoogle() {
+  const p = new GoogleAuthProvider();
+  p.setCustomParameters({ prompt: 'select_account' });
+  return p;
+}
+function guardarPendente(e) {
+  if (e && e.code === 'auth/account-exists-with-different-credential') {
+    GOOGLE_PENDENTE = { email: ((e.customData && e.customData.email) || '').toLowerCase(), credencial: GoogleAuthProvider.credentialFromError(e) };
+  }
+  return e;
+}
+/** Email da conta com senha que espera ser ligada ao Google ('' se nenhuma). */
+export function googlePendente() { return GOOGLE_PENDENTE && GOOGLE_PENDENTE.credencial ? GOOGLE_PENDENTE.email : ''; }
+/** Abre o Google. Resolve com o usuário, ou null se o navegador seguiu para a página do Google (redirect). */
+export const entrarComGoogle = () => tenta(async () => {
+  exigirConfig();
+  try {
+    return (await signInWithPopup(auth, provedorGoogle())).user;
+  } catch (e) {
+    if (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') throw new ApiError('', 'CANCELADO');
+    if (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment') {
+      await signInWithRedirect(auth, provedorGoogle());
+      return null;
+    }
+    if (e.code === 'auth/operation-not-allowed') throw new ApiError('O login com Google ainda não foi ativado no Firebase (Authentication > Método de login > Google).', e.code);
+    throw guardarPendente(e);
+  }
+});
+/** Volta de um login com Google por redirect (null se não houve). */
+export const resultadoGoogle = () => tenta(async () => {
+  exigirConfig();
+  try { const r = await getRedirectResult(auth); return r ? r.user : null; }
+  catch (e) { throw guardarPendente(e); }
+});
+/** Entra com email e senha e liga o Google pendente à conta (depois disso basta o botão do Google). */
+export const entrarEVincularGoogle = (email, senha) => tenta(async () => {
+  exigirConfig();
+  const { user } = await signInWithEmailAndPassword(auth, email.trim(), senha);
+  if (GOOGLE_PENDENTE && GOOGLE_PENDENTE.credencial && GOOGLE_PENDENTE.email === String(user.email || '').toLowerCase()) {
+    try { await linkWithCredential(user, GOOGLE_PENDENTE.credencial); }
+    catch (e) { if (e.code !== 'auth/provider-already-linked') throw e; }
+    await user.reload();
+  }
+  GOOGLE_PENDENTE = null;
+  return auth.currentUser;
+});
+export function cancelarGooglePendente() { GOOGLE_PENDENTE = null; }
+
+// ------------------------------------------------------------------ senha
+/** Toda conta precisa de senha — inclusive as criadas pelo Google. */
+export function temSenha(user = usuarioAtual()) {
+  return !!(user && (user.providerData || []).some(p => p.providerId === 'password'));
+}
+/** Cria a senha de uma conta que entrou pelo Google (liga email+senha à mesma conta). */
+export const criarSenha = senha => tenta(async () => {
+  const u = usuarioAtual();
+  if (!u || !u.email) throw new ApiError('Entre novamente.', 'AUTH');
+  const ligar = () => temSenha(u) ? updatePassword(u, senha) : linkWithCredential(u, EmailAuthProvider.credential(u.email, senha));
+  try { await ligar(); }
+  catch (e) {
+    // Sessão antiga: o Firebase pede para confirmar quem é antes de mexer na senha
+    if (e.code !== 'auth/requires-recent-login' || !u.providerData.some(p => p.providerId === 'google.com')) throw e;
+    await reauthenticateWithPopup(u, provedorGoogle());
+    await ligar();
+  }
+  await u.reload();
+  return auth.currentUser;
+});
+
+// ------------------------------------------------------------------ confirmação de email
+// Contas criadas a partir desta data só entram depois de confirmar o email. As
+// contas antigas (beta) continuam entrando; para elas a confirmação só é exigida
+// nos convites por email (regra do Firestore usa email_verified).
+const CONFIRMACAO_DESDE = Date.parse('2026-09-30T00:00:00-03:00');
+export function precisaConfirmarEmail(user = usuarioAtual()) {
+  if (!user || user.emailVerified) return false;
+  const criada = Date.parse((user.metadata && user.metadata.creationTime) || '') || 0;
+  return criada >= CONFIRMACAO_DESDE;
+}
+export function emailConfirmado(user = usuarioAtual()) { return !!(user && user.emailVerified); }
+/** (Re)envia o link de confirmação; `continuar` = para onde o link volta (ex.: com o código de convite). */
+export const enviarConfirmacaoEmail = (continuar = location.origin + '/') => tenta(async () => {
+  const u = usuarioAtual();
+  if (!u) throw new ApiError('Entre novamente.', 'AUTH');
+  await sendEmailVerification(u, { url: continuar });
+});
+/** Relê a conta no Firebase (depois de clicar no link) e renova o token para as regras verem email_verified. */
+export const recarregarConfirmacao = () => tenta(async () => {
+  const u = usuarioAtual();
+  if (!u) return false;
+  await u.reload();
+  if (auth.currentUser.emailVerified) await auth.currentUser.getIdToken(true);
+  return auth.currentUser.emailVerified;
 });
 export const esqueciSenha = email => tenta(async () => {
   exigirConfig();
@@ -110,6 +218,7 @@ export const esqueciSenha = email => tenta(async () => {
 export async function sair() {
   pararEscuta();
   CASA = null; DB = null;
+  GOOGLE_PENDENTE = null;
   TODOS_CACHE = { em: 0, grupos: null };
   if (auth) await signOut(auth);
 }
@@ -172,6 +281,7 @@ export const carregarCasa = (hidDesejada) => tenta(async () => {
   }
   pararEscuta();
   CASA = null; DB = null;
+  GOOGLE_PENDENTE = null;
   return null;
 });
 
@@ -277,7 +387,7 @@ export const cancelarConvite = codigo => tenta(async () => {
 /** Convites por email para a pessoa logada, de grupos em que ela ainda não está. */
 export const meusConvitesPendentes = () => tenta(async () => {
   const u = usuarioAtual();
-  if (!u || !u.email) return [];
+  if (!u || !u.email || !u.emailVerified) return [];
   const snap = await getDocs(query(collection(fs, 'convites'), where('email', '==', u.email.toLowerCase()), where('ativo', '==', true)));
   const { casas } = await lerPerfil(u.uid);
   return snap.docs.map(d => ({ codigo: d.id, nomeGrupo: d.data().nomeGrupo || 'Grupo', convidadoPor: d.data().convidadoPor || '',
@@ -295,6 +405,9 @@ export const entrarComConvite = (codigo, meuNome) => tenta(async () => {
   const paraEmail = conv.data().email || '';
   if (paraEmail && paraEmail !== String(u.email || '').toLowerCase()) {
     throw new ApiError('Este convite foi enviado para ' + paraEmail + '. Entre com a conta desse email para aceitar.');
+  }
+  if (paraEmail && !u.emailVerified) {
+    throw new ApiError('Confirme seu email para aceitar este convite: toque em "Confirmar meu email" no Perfil.', 'EMAIL');
   }
   const hid = conv.data().householdId;
   const perfil = await lerPerfil(u.uid);
