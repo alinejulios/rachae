@@ -4,8 +4,9 @@
     {
       "name": "rachae",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-u", "scripts/dev_server.py", "5173"],
-      "port": 5173
+      "runtimeArgs": ["-u", "scripts/dev_server.py"],
+      "port": 5173,
+      "autoPort": true
     }
   ]
 }

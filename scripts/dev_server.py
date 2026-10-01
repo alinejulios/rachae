@@ -7,12 +7,13 @@ Os dados vêm do projeto Firebase configurado em public/firebase-config.js.
 Para o login funcionar a partir do localhost, "localhost" precisa estar em
 Authentication > Configurações > Domínios autorizados (já vem por padrão).
 """
+import os
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 PUBLIC = Path(__file__).resolve().parent.parent / "public"
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5173
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", 5173))
 
 
 class Handler(SimpleHTTPRequestHandler):
