@@ -259,8 +259,8 @@ export function montarHistorico(dbOriginal, grupoId, meUid, souDono) {
 
 const somaMeses = (mesISO, n) => {
   const [a, m] = mesISO.split('-').map(Number);
-  const d = new Date(a, m - 1 + n, 1);
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  const t = a * 12 + (m - 1) + n; // contagem de meses (sem Date: é chamada milhares de vezes)
+  return Math.floor(t / 12) + '-' + String(((t % 12) + 12) % 12 + 1).padStart(2, '0');
 };
 
 /** Segmento das contas do mês a mês (luz, internet…): só nele existe a opção "valor fixo". */
@@ -331,6 +331,14 @@ function acertosNasParcelas(db) {
   const membrosDe = gid => membrosPorGrupo[gid] ||
     (membrosPorGrupo[gid] = membrosDoGrupo((db.grupos || []).find(g => g.id === gid), db.membros || []));
   const pagamentos = [...(db.pagamentos || [])];
+  // Índices: compras por conjunto+comprador (mais antiga primeiro) e total pago por compra+pessoa
+  const comprasDe = {};
+  db.compras.slice().sort((a, b) => String(a.data).localeCompare(String(b.data))).forEach(c => {
+    (comprasDe[c.grupoId + '|' + c.comprador] = comprasDe[c.grupoId + '|' + c.comprador] || []).push(c);
+  });
+  const pagoPor = {};
+  pagamentos.forEach(p => { pagoPor[p.compraId + '|' + p.pessoa] = (pagoPor[p.compraId + '|' + p.pessoa] || 0) + p.valor; });
+  const calendario = {}; // compra|pessoa → parcelas da parte dela (calculado uma vez)
   const abatido = {};
   const mesDe = d => d.mesRef || String(d.data || '').slice(0, 7);
   acertos.slice().sort((a, b) => (mesDe(a) + a.data).localeCompare(mesDe(b) + b.data)).forEach(d => {
@@ -338,17 +346,24 @@ function acertosNasParcelas(db) {
     const membrosG = membrosDe(d.grupoId);
     if (!membrosG.has(de) || !membrosG.has(para)) return;
     let resta = d.valor;
-    db.compras.filter(c => c.grupoId === d.grupoId && c.comprador === para)
-      .sort((a, b) => String(a.data).localeCompare(String(b.data))).forEach(c => {
+    (comprasDe[d.grupoId + '|' + para] || []).forEach(c => {
         if (resta <= 0) return;
-        const parte = devidoPorPessoa(c, membrosG)[de] || 0;
-        if (!parte) return;
-        const pago = pagamentos.reduce((t, p) => t + (p.compraId === c.id && p.pessoa === de ? p.valor : 0), 0);
-        const parcelas = parcelasDaPessoa(c, parte, pago);
-        if (parcelas.some(p => p.mes < mes && p.aberto > 0)) return;
-        const v = Math.min(resta, parcelas.filter(p => p.mes === mes).reduce((t, p) => t + p.aberto, 0));
+        const chave = c.id + '|' + de;
+        if (!(chave in calendario)) {
+          const parte = devidoPorPessoa(c, membrosG)[de] || 0;
+          calendario[chave] = parte ? parcelasDaCompra({ ...c, valor: parte }) : null;
+        }
+        const parcelas = calendario[chave];
+        if (!parcelas) return;
+        // Pagamentos abatem da mais antiga para a mais nova: o que vence antes de `mes` precisa estar pago
+        let antes = 0, noMes = 0;
+        parcelas.forEach(p => { if (p.mes < mes) antes += p.valor; else if (p.mes === mes) noMes += p.valor; });
+        const pago = pagoPor[chave] || 0;
+        if (pago < antes) return;
+        const v = Math.min(resta, Math.max(0, antes + noMes - pago));
         if (v <= 0) return;
         pagamentos.push({ id: 'acerto:' + d.id + ':' + c.id, compraId: c.id, pessoa: de, valor: v, data: d.data, virtual: true });
+        pagoPor[c.id + '|' + de] = pago + v;
         resta -= v;
       });
     if (resta < d.valor) abatido[d.id] = d.valor - resta;
