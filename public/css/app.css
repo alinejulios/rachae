@@ -1,7 +1,9 @@
 :root {
   color-scheme: light;
-  --font-body:      'Nunito', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-display:   'Fredoka', var(--font-body);
+  --font-body:      'Inter', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display:   'Plus Jakarta Sans', var(--font-body);
+  --brand-gradient: linear-gradient(135deg, #00D2FF 0%, #2563EB 50%, #5C82FF 100%);
+  --brand-glow:     0 8px 22px -8px rgba(0,210,255,0.45);
   --surface-1:      #ffffff;
   --surface-2:      #f4f7fc;
   --card-border:    rgba(20,40,80,0.10);
@@ -10,19 +12,19 @@
   --text-muted:     #8b95a5;
   --gridline:       #e6ebf4;
   --baseline:       #ccd4e2;
-  --brand-blue:      #2f6fed;
-  --brand-blue-dark: #1f4fc4;
-  --brand-blue-tint: #e8f0ff;
-  --brand-aqua:      #0fb4b0;
-  --brand-aqua-dark: #0a8683;
-  --brand-aqua-tint: #e2faf8;
+  --brand-blue:      #2563eb;
+  --brand-blue-dark: #1d4ed8;
+  --brand-blue-tint: #e8efff;
+  --brand-aqua:      #00b8e6;
+  --brand-aqua-dark: #0089b0;
+  --brand-aqua-tint: #e0f8ff;
   --series-1:       var(--brand-blue);
-  --good:           #1aa564;
-  --good-text:      #0f7d4c;
-  --good-tint:      #e6f7ee;
-  --critical:       #e0393e;
+  --good:           #10b981;
+  --good-text:      #047857;
+  --good-tint:      #e3f8ef;
+  --critical:       #dc2626;
   --critical-tint:  #fdeaea;
-  --warning:        #b87400;
+  --warning:        #b45309;
   --input-bg:       #ffffff;
   --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
   --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #4a3aa7; --cat-8: #e34948;
@@ -45,18 +47,18 @@
     --text-muted:     #838da0;
     --gridline:       #262c38;
     --baseline:       #3a4152;
-    --brand-blue:      #588cf5;
-    --brand-blue-dark: #3f6fe0;
-    --brand-blue-tint: #1c2c4d;
-    --brand-aqua:      #35d6d0;
-    --brand-aqua-dark: #1fada8;
-    --brand-aqua-tint: #123a38;
-    --good:           #35c485;
-    --good-text:      #3fd694;
-    --good-tint:      #123425;
-    --critical:       #f0656a;
+    --brand-blue:      #5c82ff;
+    --brand-blue-dark: #7c9cff;
+    --brand-blue-tint: #1c2a4f;
+    --brand-aqua:      #00d2ff;
+    --brand-aqua-dark: #33dbff;
+    --brand-aqua-tint: #0f3240;
+    --good:           #10b981;
+    --good-text:      #34d399;
+    --good-tint:      #10332a;
+    --critical:       #ef4444;
     --critical-tint:  #3a1c1e;
-    --warning:        #f0ad3d;
+    --warning:        #f59e0b;
     --input-bg:       #1e2330;
     --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
     --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
@@ -90,12 +92,12 @@ button, a, select, input, label { touch-action: manipulation; }
 
 /* ---------- Marca ---------- */
 .brand-mark {
-  width: 64px; height: 64px; margin: 0 auto 14px; border-radius: 22px;
-  background: linear-gradient(155deg, var(--brand-blue), var(--brand-aqua));
+  width: 64px; height: 64px; margin: 0 auto 14px; border-radius: 16px;
+  background: var(--brand-gradient);
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 8px 20px -8px rgba(47,111,237,0.5);
+  box-shadow: var(--brand-glow);
 }
-.brand-mark svg { width: 34px; height: 34px; }
+.brand-mark svg { width: 100%; height: 100%; }
 
 /* ---------- Login ---------- */
 #screen-login {
@@ -104,7 +106,7 @@ button, a, select, input, label { touch-action: manipulation; }
   padding: calc(32px + var(--safe-top)) 24px calc(32px + var(--safe-bottom));
   text-align: center;
 }
-#screen-login h1 { font-family: var(--font-display); font-size: 28px; font-weight: 700; margin: 0 0 4px; letter-spacing: -.01em; }
+#screen-login h1 { font-family: var(--font-display); font-size: 30px; font-weight: 800; margin: 0 0 4px; letter-spacing: -.02em; }
 #screen-login p { color: var(--text-secondary); font-size: 15px; margin: 0 0 24px; }
 #screen-login p.hint { margin: 10px 0 0; font-size: 13px; }
 #screen-login p.convite-aviso { margin: -12px 0 18px; text-align: center; line-height: 1.45; }
@@ -191,11 +193,11 @@ header.topbar .who-chevron { width: 16px; height: 16px; flex-shrink: 0; color: v
 .page-title { font-family: var(--font-display); font-size: 22px; font-weight: 700; margin: 4px 0 4px; }
 .page-sub { color: var(--text-secondary); font-size: 14px; margin: 0 0 14px; }
 header.topbar .who-badge {
-  width: 32px; height: 32px; border-radius: 10px; flex-shrink: 0;
-  background: linear-gradient(155deg, var(--brand-blue), var(--brand-aqua));
+  width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+  background: var(--brand-gradient);
   display: flex; align-items: center; justify-content: center;
 }
-header.topbar .who-badge svg { width: 18px; height: 18px; }
+header.topbar .who-badge svg { width: 100%; height: 100%; }
 header.topbar .who-sub { color: var(--text-secondary); font-weight: 400; font-size: 12px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 #grupo-switcher {
