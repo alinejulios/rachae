@@ -274,6 +274,8 @@ function mostrarConfirmacaoEmail(user) {
   $('screen-app').classList.add('hidden');
   $('screen-login').classList.remove('hidden');
   $('verificar-email').textContent = user.email;
+  const erro = Firebase.erroEnvioConfirmacao();
+  hint('verificar-hint', erro ? 'Não conseguimos enviar o email: ' + erro + ' Toque em "Reenviar email".' : '', erro ? 'error' : '');
   mostrarPasso('step-verificar');
 }
 ACTIONS.jaConfirmei = async el => {

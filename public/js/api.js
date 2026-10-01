@@ -106,7 +106,8 @@ export const criarConta = (nome, email, senha, continuar = location.origin + '/'
   exigirConfig();
   const { user } = await createUserWithEmailAndPassword(auth, email.trim(), senha);
   await updateProfile(user, { displayName: nome });
-  await sendEmailVerification(user, { url: continuar }).catch(() => {}); // dá para reenviar depois
+  // Falhou o envio? A conta já existe: a tela de confirmação mostra o erro e deixa reenviar
+  await mandarConfirmacao(user, continuar).catch(e => { ERRO_CONFIRMACAO = traduz(e).message; });
   return user;
 });
 
@@ -189,6 +190,19 @@ export const criarSenha = senha => tenta(async () => {
 // Contas criadas a partir desta data só entram depois de confirmar o email. As
 // contas antigas (beta) continuam entrando; para elas a confirmação só é exigida
 // nos convites por email (regra do Firestore usa email_verified).
+let ERRO_CONFIRMACAO = '';
+/** Erro do envio automático do link (na criação da conta), para mostrar na tela de confirmação. */
+export function erroEnvioConfirmacao() { const m = ERRO_CONFIRMACAO; ERRO_CONFIRMACAO = ''; return m; }
+// Envia o link com o endereço de volta para o app; se o Firebase recusar esse endereço
+// (domínio fora de "Domínios autorizados"), envia sem ele: o link ainda confirma o email.
+async function mandarConfirmacao(user, continuar) {
+  try { await sendEmailVerification(user, { url: continuar }); }
+  catch (e) {
+    if (!/continue-uri|unauthorized-domain|invalid-continue|missing-continue/.test(e.code || '')) throw e;
+    console.warn('Link de volta recusado pelo Firebase (' + e.code + '): enviando sem ele.');
+    await sendEmailVerification(user);
+  }
+}
 const CONFIRMACAO_DESDE = Date.parse('2026-09-30T00:00:00-03:00');
 export function precisaConfirmarEmail(user = usuarioAtual()) {
   if (!user || user.emailVerified) return false;
@@ -200,7 +214,7 @@ export function emailConfirmado(user = usuarioAtual()) { return !!(user && user.
 export const enviarConfirmacaoEmail = (continuar = location.origin + '/') => tenta(async () => {
   const u = usuarioAtual();
   if (!u) throw new ApiError('Entre novamente.', 'AUTH');
-  await sendEmailVerification(u, { url: continuar });
+  await mandarConfirmacao(u, continuar);
 });
 /** Relê a conta no Firebase (depois de clicar no link) e renova o token para as regras verem email_verified. */
 export const recarregarConfirmacao = () => tenta(async () => {
