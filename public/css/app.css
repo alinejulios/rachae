@@ -462,3 +462,12 @@ body.on-login #toast { bottom: calc(24px + var(--safe-bottom)); }
 .senha-regras li.ok { color: var(--good-text); font-weight: 700; }
 .acerto-composicao { margin: 4px 0 0; padding-left: 18px; }
 .acerto-composicao li { margin: 1px 0; }
+.composicao { margin-top: 12px; padding-top: 4px; border-top: 1px solid var(--gridline); }
+.composicao-grupo { border-bottom: 1px solid var(--gridline); }
+.composicao-grupo > summary { cursor: pointer; list-style: none; border-bottom: none; font-weight: 700; }
+.composicao-grupo > summary .sub { font-weight: 400; }
+.composicao-grupo > summary::-webkit-details-marker { display: none; }
+.composicao-grupo > summary > :first-child::before { content: '▸'; display: inline-block; width: 1em; color: var(--text-secondary); transition: transform .15s; }
+.composicao-grupo[open] > summary > :first-child::before { transform: rotate(90deg); }
+.composicao-grupo > .list-row { padding: 6px 0 6px 1em; font-size: 14px; border-bottom: none; }
+.composicao-total { font-weight: 800; border-bottom: none; }

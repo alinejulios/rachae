@@ -678,7 +678,12 @@ function renderDashboard(d) {
   if (!STATE.mesAcerto || !mesesComSaldo(d).includes(STATE.mesAcerto)) STATE.mesAcerto = mesAtualKey();
   const el = $('tab-dashboard');
   const p = d.pessoal || { saldoGeral: 0, saldoAv: 0, saldoParc: 0 };
-  const statusKind = p.saldoGeral > 0.5 ? 'good' : (p.saldoGeral < -0.5 ? 'critical' : 'neutral');
+  // O topo segue o período do acerto: saldo total ou só o do mês escolhido
+  const porMes = ACERTO_MES !== 'tudo';
+  const eu = Firebase.usuarioAtual().uid;
+  const saldosMes = ((d.meses || {})[STATE.mesAcerto] || {}).saldos || [];
+  const saldoTopo = porMes ? (saldosMes.find(s => s._uid === eu) || { saldo: 0 }).saldo : p.saldoGeral;
+  const statusKind = saldoTopo > 0.005 ? 'good' : (saldoTopo < -0.005 ? 'critical' : 'neutral');
   const statusClass = 'status-' + statusKind;
   const statusLabel = { good: 'A RECEBER', critical: 'A PAGAR', neutral: 'QUITADO' }[statusKind];
   const grupoLabel = d.grupoAtual ? ' · ' + d.grupoAtual : '';
@@ -701,35 +706,35 @@ function renderDashboard(d) {
     <div id="install-card"></div>
     <div id="convites-pendentes">${convitesPendentesHtml(CONVITES_PENDENTES)}</div>
     <div class="card hero">
-      <div class="label">Seu saldo geral${h(grupoLabel)}</div>
-      <div class="value ${statusClass}">${fmtBRL(Math.abs(p.saldoGeral))}</div>
+      <div class="label">${porMes ? 'Seu saldo em ' + labelMes(STATE.mesAcerto).toLowerCase() : 'Seu saldo geral'}${h(grupoLabel)}</div>
+      <div class="value ${statusClass}">${fmtBRL(Math.abs(saldoTopo))}</div>
       <div class="status ${statusClass}">${statusIconSvg(statusKind)}${statusLabel}</div>
       ${naoEhMembro ? `<p class="hint">Você não participa do conjunto "${h(d.grupoAtual)}".</p>` : ''}
       ${naoEhMembro ? '' : `<div class="stat-row">
-        ${saldoTileHtml('Vencido até agora', saldoNosMeses(d, m => m <= mesAtualKey()))}
-        ${saldoTileHtml('Parcelas a vencer', saldoNosMeses(d, m => m > mesAtualKey()))}
+        ${porMes ? saldoTileHtml('Despesas do mês', itensDoMes(d, x => x.tipo !== 'parcela'))
+          + saldoTileHtml('Parcelas do mês', itensDoMes(d, x => x.tipo === 'parcela'))
+          : saldoTileHtml('Vencido até agora', saldoNosMeses(d, m => m <= mesAtualKey()))
+          + saldoTileHtml('Parcelas a vencer', saldoNosMeses(d, m => m > mesAtualKey()))}
       </div>
       <p class="hint" style="margin:10px 0 0;">Já descontado o que te devem do que você deve. O valor cheio de cada parcela fica na aba Pagar.</p>`}
+      ${periodoSelectHtml(d, 'margin-top:12px')}
     </div>
 
     <div class="card">
-      <h3>Saldo de todos</h3>
+      <h3>Saldo de todos${porMes ? ' em ' + labelMes(STATE.mesAcerto).toLowerCase() : ''}</h3>
       <div id="saldos-bars"></div>
     </div>
 
     <div class="card">
       <div class="chart-head">
         <h3>Acertar as contas</h3>
-        <select class="chart-select" data-change="escolherPeriodoAcerto" aria-label="Período do acerto">
-          <option value="tudo" ${ACERTO_MES === 'tudo' ? 'selected' : ''}>Tudo (saldo total)</option>
-          ${mesesComSaldo(d).map(m => `<option value="${m}" ${ACERTO_MES === 'mes' && m === STATE.mesAcerto ? 'selected' : ''}>${labelMes(m)}</option>`).join('')}
-        </select>
+        ${periodoSelectHtml(d)}
       </div>
-      <div id="saldo-mes"></div>
       <p class="hint" style="margin:0 0 10px;">${ACERTO_MES === 'tudo'
         ? 'Já descontado o que cada um deve ao outro, em todos os meses: o menor número de Pix para deixar todo mundo quitado.'
         : 'Quem paga quem só pelo que é deste mês. Cada Pix registrado abate o saldo do mês e o total.'}</p>
       <div id="acertos-lista">${acertosHtml(d)}</div>
+      ${composicaoSaldoHtml(d)}
       <div id="pendencias"></div>
     </div>
 
@@ -766,7 +771,7 @@ function renderDashboard(d) {
   `;
 
   renderInstallCard();
-  renderSaldoBars(d.saldosPorPessoa || []);
+  renderSaldoBars(porMes ? saldosMes.map(x => ({ nome: x.nome, saldoGeral: x.saldo })) : (d.saldosPorPessoa || []));
   renderSaldoMes(d);
   renderChartMensal();
   renderChartCategoriaMes();
@@ -778,6 +783,18 @@ function saldoNosMeses(d, filtro) {
   const cent = Object.keys(d.meses || {}).filter(filtro)
     .reduce((t, m) => t + Math.round(((d.meses[m].saldos.find(s => s._uid === eu) || {}).saldo || 0) * 100), 0);
   return cent / 100;
+}
+/** Meu saldo no mês do acerto somando só os itens que passam no filtro (parcelas ou o resto). */
+function itensDoMes(d, filtro) {
+  const itens = ((d.meses || {})[STATE.mesAcerto] || {}).meusItens || [];
+  return itens.filter(filtro).reduce((t, x) => t + Math.round(x.valor * 100), 0) / 100;
+}
+/** Seletor do período (tudo ou um mês): o mesmo no topo e no acerto, um muda o outro. */
+function periodoSelectHtml(d, estilo) {
+  return `<select class="chart-select" data-change="escolherPeriodoAcerto" aria-label="Período do saldo"${estilo ? ` style="${estilo}"` : ''}>
+    <option value="tudo" ${ACERTO_MES === 'tudo' ? 'selected' : ''}>Tudo (saldo total)</option>
+    ${mesesComSaldo(d).map(m => `<option value="${m}" ${ACERTO_MES === 'mes' && m === STATE.mesAcerto ? 'selected' : ''}>${labelMes(m)}</option>`).join('')}
+  </select>`;
 }
 function saldoTileHtml(rotulo, v) {
   const kind = v > 0.005 ? 'good' : (v < -0.005 ? 'critical' : 'neutral');
@@ -1848,6 +1865,62 @@ ACTIONS.escolherPeriodoAcerto = el => {
   ACERTO_ABERTO = null;
   renderDashboard(STATE.dashboard);
 };
+// ---------- O que entra no valor do acerto ----------
+const TIPOS_SALDO = [['fixa', 'Contas fixas'], ['parcela', 'Parceladas'], ['avista', 'À vista'], ['acerto', 'Pix já registrados']];
+const mesCurto = m => MESES_ABREV[Number(m.slice(5, 7)) - 1].toLowerCase() + '/' + m.slice(0, 4);
+function textoParcelas(nums, n) {
+  const ord = [...new Set(nums)].sort((a, b) => a - b);
+  const seguidas = ord.every((x, i) => !i || x === ord[i - 1] + 1);
+  if (ord.length === 1) return 'parcela ' + ord[0] + '/' + n;
+  return 'parcelas ' + (seguidas ? ord[0] + ' a ' + ord[ord.length - 1] : ord.join(', ')) + ' de ' + n;
+}
+/** Meus itens no período do acerto (mês escolhido, ou todos os meses que ainda têm saldo), agrupados por tipo. */
+function composicaoDoPeriodo(d) {
+  const eu = Firebase.usuarioAtual().uid;
+  const meses = ACERTO_MES === 'tudo'
+    ? Object.keys(d.meses || {}).filter(m => Math.abs((d.meses[m].saldos.find(s => s._uid === eu) || {}).saldo || 0) > 0.004)
+    : [STATE.mesAcerto];
+  const grupos = {};
+  meses.sort().forEach(m => ((d.meses[m] || {}).meusItens || []).forEach(x => {
+    const g = grupos[x.tipo] = grupos[x.tipo] || {};
+    const it = g[x.id] = g[x.id] || { descricao: x.descricao, cent: 0, meses: [], nums: [], n: x.n };
+    it.cent += Math.round(x.valor * 100);
+    it.meses.push(m);
+    if (x.num) it.nums.push(x.num);
+  }));
+  return TIPOS_SALDO.map(([tipo, rotulo]) => {
+    const itens = Object.values(grupos[tipo] || {}).filter(i => i.cent !== 0);
+    return { tipo, rotulo, itens, cent: itens.reduce((t, i) => t + i.cent, 0) };
+  }).filter(g => g.itens.length);
+}
+// Vermelho: você deve; verde: te devem. "−" quando o item vai na direção contrária do total (é descontado dele)
+function valorSaldoHtml(cent, total) {
+  const desconta = total !== 0 && Math.sign(cent) !== Math.sign(total);
+  return `<span class="acerto-valor ${cent > 0 ? 'status-good' : 'status-critical'}">${desconta ? '− ' : ''}${fmtBRL(Math.abs(cent) / 100)}</span>`;
+}
+function composicaoSaldoHtml(d) {
+  if (!d.pessoal) return '';
+  const grupos = composicaoDoPeriodo(d);
+  if (!grupos.length) return '';
+  const total = grupos.reduce((t, g) => t + g.cent, 0);
+  const detalhe = (g, i) => {
+    const unicoMes = new Set(i.meses).size === 1;
+    if (g.tipo === 'parcela') return textoParcelas(i.nums, i.n) + (unicoMes ? ' · ' + mesCurto(i.meses[0]) : '');
+    if (unicoMes) return mesCurto(i.meses[0]);
+    return i.meses.length + ' meses';
+  };
+  const varias = (d.saldosPorPessoa || []).length > 2;
+  return `<div class="composicao">
+    <span class="field-label">O que entra no seu saldo ${ACERTO_MES === 'tudo' ? 'total' : 'de ' + labelMes(STATE.mesAcerto).toLowerCase()}</span>
+    ${grupos.map(g => `<details class="composicao-grupo">
+      <summary class="list-row"><div>${g.rotulo}<div class="sub">${g.itens.length} ${g.itens.length > 1 ? 'itens' : 'item'}</div></div>${valorSaldoHtml(g.cent, total)}</summary>
+      ${g.itens.map(i => `<div class="list-row"><div>${h(i.descricao)}<div class="sub">${detalhe(g, i)} · ${g.tipo === 'acerto' ? (i.cent > 0 ? 'você já pagou' : 'já te pagaram') : (i.cent > 0 ? 'te devem' : 'você deve')}</div></div>${valorSaldoHtml(i.cent, total)}</div>`).join('')}
+    </details>`).join('')}
+    <div class="list-row composicao-total"><div>${total < 0 ? 'Você paga' : total > 0 ? 'Você recebe' : 'Quitado'}</div>
+      <span class="acerto-valor ${total < 0 ? 'status-critical' : total > 0 ? 'status-good' : ''}">${fmtBRL(Math.abs(total) / 100)}</span></div>
+    <p class="hint" style="margin:4px 0 0;">Vermelho é o que você deve; verde, o que te devem. Itens com "−" já estão descontados do total.${varias ? ' Inclui o que você tem com todas as pessoas do conjunto.' : ''} Toque num grupo para ver os itens.</p>
+  </div>`;
+}
 /** Meses até o atual em que meu saldo ficou negativo (dívidas antigas ainda não acertadas). */
 function mesesEmAberto(d) {
   const eu = Firebase.usuarioAtual().uid;
@@ -1875,18 +1948,8 @@ ACTIONS.irParaMesAcerto = el => {
   if (card) card.closest('.card').scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
 function renderSaldoMes(d) {
-  const el = $('saldo-mes');
-  if (!el) return;
   const pend = $('pendencias');
   if (pend) pend.innerHTML = pendenciasHtml(d);
-  if (ACERTO_MES === 'tudo') { el.innerHTML = ''; return; }
-  const m = (d.meses || {})[STATE.mesAcerto];
-  const eu = Firebase.usuarioAtual().uid;
-  const meu = m ? (m.saldos.find(s => s._uid === eu) || { saldo: 0 }).saldo : 0;
-  const cls = meu > 0.005 ? 'status-good' : (meu < -0.005 ? 'status-critical' : 'status-neutral');
-  el.innerHTML = `<div class="list-row"><div>Seu saldo em ${labelMes(STATE.mesAcerto).toLowerCase()}
-      <div class="sub">${meu > 0.005 ? 'a receber' : (meu < -0.005 ? 'a pagar' : 'quitado')} · só lançamentos e parcelas deste mês</div></div>
-    <div class="acerto-valor ${cls}">${fmtBRL(Math.abs(meu))}</div></div>`;
 }
 ACTIONS.registrarAcerto = async el => {
   const a = listaAcertos(STATE.dashboard)[Number(el.dataset.i)];

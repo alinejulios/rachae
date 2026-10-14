@@ -135,10 +135,12 @@ export function montarDashboard(dbOriginal, meUid, grupoId) {
 
   const pessoal = saldosPorPessoa.find(s => s._uid === meUid) || null;
   const porMes = saldosPorMes(db, grupoId, membrosG);
+  const meusItens = membrosG.has(meUid) ? itensDoSaldo(db, grupoId, membrosG, meUid) : {};
   const meses = {};
   Object.keys(porMes).sort().forEach(mes => {
     const lista = [...membrosG].map(u => ({ uid: u, saldo: porMes[mes][u] || 0 }));
     meses[mes] = {
+      meusItens: (meusItens[mes] || []).map(x => ({ ...x, valor: reais(x.valor) })),
       saldos: lista.map(x => ({ nome: nome(x.uid), _uid: x.uid, saldo: reais(x.saldo) }))
         .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
       acertos: acertosSugeridos(lista).map(a => ({ ...a, deNome: nome(a.de), paraNome: nome(a.para), valor: reais(a.valor) }))
@@ -194,6 +196,39 @@ export function saldosPorMes(db, grupoId, membrosG) {
         if (membrosG.has(c.comprador)) soma(p.mes, c.comprador, p.aberto);
       });
     });
+  });
+  return out;
+}
+
+/**
+ * O que forma o saldo de UMA pessoa em cada mês, item a item (mesma conta de `saldosPorMes`:
+ * a soma dos itens de um mês é o saldo dela naquele mês). Valor em centavos: + a receber, − a pagar.
+ *  - tipo 'fixa' (conta fixa), 'avista' (despesa comum), 'acerto' (Pix já registrado; só a parte
+ *    que não virou pagamento de parcela) e 'parcela' (o que falta da parcela daquele mês, com num/n).
+ * @returns {Object<string, {tipo, id, descricao, valor, num?, n?}[]>}
+ */
+export function itensDoSaldo(db, grupoId, membrosG, uid) {
+  const out = {};
+  const add = (mes, item) => { if (mes && item.valor) (out[mes] = out[mes] || []).push(item); };
+  db.despesas.filter(d => d.grupoId === grupoId).forEach(d => {
+    const mes = d.acerto && d.mesRef ? d.mesRef : String(d.data || '').slice(0, 7);
+    const valor = (d.pagoPor === uid ? d.valor : 0) - (devidoPorPessoa(d, membrosG)[uid] || 0);
+    const tipo = d.acerto ? 'acerto' : (d.valorFixo === true || d.automatica) ? 'fixa' : 'avista';
+    add(mes, { tipo, id: d.serieId || d.id, descricao: d.descricao, valor });
+  });
+  db.compras.filter(c => c.grupoId === grupoId).forEach(c => {
+    const s = situacaoCompra(c, membrosG, db.pagamentos);
+    const n = Math.max(1, c.nParcelas || 1);
+    const porNum = {};
+    Object.keys(s.parte).forEach(u => {
+      if (u === c.comprador || (u !== uid && c.comprador !== uid)) return;
+      parcelasDaPessoa(c, s.parte[u], s.pago[u]).forEach(p => {
+        const k = p.mes + '|' + p.num;
+        porNum[k] = porNum[k] || { mes: p.mes, num: p.num, valor: 0 };
+        porNum[k].valor += u === uid ? -p.aberto : p.aberto;
+      });
+    });
+    Object.values(porNum).forEach(p => add(p.mes, { tipo: 'parcela', id: c.id, descricao: c.descricao, valor: p.valor, num: p.num, n }));
   });
   return out;
 }
