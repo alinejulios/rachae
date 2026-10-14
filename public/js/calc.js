@@ -231,19 +231,27 @@ export function montarHistorico(dbOriginal, grupoId, meUid, souDono) {
   const membrosG = membrosDoGrupo(grupo, db.membros);
   const podeApagar = x => souDono || x.criadoPor === meUid;
 
+  const comprasGrupo = db.compras.filter(c => c.grupoId === grupoId);
+  const compraPorId = Object.fromEntries(comprasGrupo.map(c => [c.id, c]));
+  // Acerto de contas: quanto dele quitou parcelas (pagamentos calculados) e quanto ficou no saldo das despesas
+  const composicao = d => {
+    if (!d.acerto) return null;
+    const prefixo = 'acerto:' + d.id + ':';
+    const parcelas = db.pagamentos.filter(p => p.virtual && String(p.id).startsWith(prefixo) && compraPorId[p.compraId])
+      .map(p => ({ descricao: compraPorId[p.compraId].descricao, valor: reais(p.valor) }));
+    return { mesRef: d.mesRef || String(d.data || '').slice(0, 7), parcelas, despesas: reais(d.valor) };
+  };
   const despesas = db.despesas.filter(d => d.grupoId === grupoId).sort(porDataDesc).slice(0, 30).map(d => ({
-    row: d.id, id: d.id, acerto: !!d.acerto, data: dataBR(d.data), descricao: d.descricao, categoria: d.categoria, segmento: d.segmento,
+    row: d.id, id: d.id, acerto: !!d.acerto, composicao: composicao(d), data: dataBR(d.data), descricao: d.descricao, categoria: d.categoria, segmento: d.segmento,
     grupo: grupo && grupo.nome, valor: reais(d.valorOriginal || d.valor), pagoPor: nome(d.pagoPor), metodo: d.metodo, podeApagar: podeApagar(d),
     valorFixo: d.valorFixo === true, automatica: !!d.automatica, serieId: d.serieId || null, mes: d.mes || null,
     encerradaEm: d.fixoAte || null
   }));
-  const comprasGrupo = db.compras.filter(c => c.grupoId === grupoId);
   const compras = comprasGrupo.slice().sort(porDataDesc).slice(0, 30).map(c => ({
     id: codigoCompra(c.id), docId: c.id, data: dataBR(c.data), descricao: c.descricao, categoria: c.categoria,
     grupo: grupo && grupo.nome, valorTotal: reais(c.valor), comprador: nome(c.comprador), nParcelas: c.nParcelas,
     saldoTotal: reais(situacaoCompra(c, membrosG, db.pagamentos).saldoTotal), podeApagar: podeApagar(c)
   }));
-  const compraPorId = Object.fromEntries(comprasGrupo.map(c => [c.id, c]));
   const pagamentos = db.pagamentos.filter(p => compraPorId[p.compraId] && !p.virtual).sort(porDataDesc).slice(0, 30).map(p => ({
     id: p.id, data: dataBR(p.data), compraId: codigoCompra(p.compraId), descricao: compraPorId[p.compraId].descricao,
     pessoa: nome(p.pessoa), valor: reais(p.valor), podeApagar: souDono || p.pessoa === meUid,

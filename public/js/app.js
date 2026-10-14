@@ -705,10 +705,11 @@ function renderDashboard(d) {
       <div class="value ${statusClass}">${fmtBRL(Math.abs(p.saldoGeral))}</div>
       <div class="status ${statusClass}">${statusIconSvg(statusKind)}${statusLabel}</div>
       ${naoEhMembro ? `<p class="hint">Você não participa do conjunto "${h(d.grupoAtual)}".</p>` : ''}
-      <div class="stat-row">
-        <div class="stat-tile"><div class="l">Saldo avulsas</div><div class="v">${fmtBRL(p.saldoAv)}</div></div>
-        <div class="stat-tile"><div class="l">Saldo parceladas</div><div class="v">${fmtBRL(p.saldoParc)}</div></div>
+      ${naoEhMembro ? '' : `<div class="stat-row">
+        ${saldoTileHtml('Vencido até agora', saldoNosMeses(d, m => m <= mesAtualKey()))}
+        ${saldoTileHtml('Parcelas a vencer', saldoNosMeses(d, m => m > mesAtualKey()))}
       </div>
+      <p class="hint" style="margin:10px 0 0;">Já descontado o que te devem do que você deve. O valor cheio de cada parcela fica na aba Pagar.</p>`}
     </div>
 
     <div class="card">
@@ -720,13 +721,13 @@ function renderDashboard(d) {
       <div class="chart-head">
         <h3>Acertar as contas</h3>
         <select class="chart-select" data-change="escolherPeriodoAcerto" aria-label="Período do acerto">
-          ${mesesComSaldo(d).map(m => `<option value="${m}" ${ACERTO_MES === 'mes' && m === STATE.mesAcerto ? 'selected' : ''}>${labelMes(m)}</option>`).join('')}
           <option value="tudo" ${ACERTO_MES === 'tudo' ? 'selected' : ''}>Tudo (saldo total)</option>
+          ${mesesComSaldo(d).map(m => `<option value="${m}" ${ACERTO_MES === 'mes' && m === STATE.mesAcerto ? 'selected' : ''}>${labelMes(m)}</option>`).join('')}
         </select>
       </div>
       <div id="saldo-mes"></div>
       <p class="hint" style="margin:0 0 10px;">${ACERTO_MES === 'tudo'
-        ? 'O menor número de Pix para deixar todo mundo quitado.'
+        ? 'Já descontado o que cada um deve ao outro, em todos os meses: o menor número de Pix para deixar todo mundo quitado.'
         : 'Quem paga quem só pelo que é deste mês. Cada Pix registrado abate o saldo do mês e o total.'}</p>
       <div id="acertos-lista">${acertosHtml(d)}</div>
       <div id="pendencias"></div>
@@ -770,6 +771,19 @@ function renderDashboard(d) {
   renderChartMensal();
   renderChartCategoriaMes();
   renderChartReembolsos(d.reembolsosPorPessoa || []);
+}
+/** Meu saldo líquido (+ a receber, − a pagar) somando os meses que passam no filtro. */
+function saldoNosMeses(d, filtro) {
+  const eu = Firebase.usuarioAtual().uid;
+  const cent = Object.keys(d.meses || {}).filter(filtro)
+    .reduce((t, m) => t + Math.round(((d.meses[m].saldos.find(s => s._uid === eu) || {}).saldo || 0) * 100), 0);
+  return cent / 100;
+}
+function saldoTileHtml(rotulo, v) {
+  const kind = v > 0.005 ? 'good' : (v < -0.005 ? 'critical' : 'neutral');
+  const sub = { good: 'a receber', critical: 'a pagar', neutral: 'quitado' }[kind];
+  return `<div class="stat-tile"><div class="l">${rotulo}</div>
+    <div class="v status-${kind}">${fmtBRL(Math.abs(v))}</div><div class="l" style="font-weight:600">${sub}</div></div>`;
 }
 function seletoresGraficos(d) {
   const anos = Array.from(new Set((d.evolucaoMensal || []).map(m => Number(m.mes.slice(0, 4)))));
@@ -1560,7 +1574,7 @@ function renderHistorico(data) {
     ${card('despesas', data.despesas.length ? data.despesas.map(d => `
       <div class="hist-item">
         <div class="top"><span>${d.acerto ? '💸 ' : d.valorFixo ? '🔁 ' : ''}${h(d.descricao)}</span><span>${fmtBRL(d.valor)}</span></div>
-        <div class="sub">${d.acerto ? h(d.data) + ' · acerto de contas via Pix'
+        <div class="sub">${d.acerto ? h(d.data) + ' · acerto de contas via Pix' + composicaoAcertoHtml(d.composicao)
           : `${h(d.data)} · ${h(d.categoria)}${d.segmento ? ' · ' + h(d.segmento) : ''} · pago por ${h(d.pagoPor)} · ${h(d.metodo)}${
             d.automatica ? ' · lançada automaticamente (conta fixa)' : d.valorFixo ? ' · conta fixa, repete todo mês' + (d.encerradaEm ? ' até ' + h(d.encerradaEm.slice(5) + '/' + d.encerradaEm.slice(0, 4)) : '') : ''}`}</div>
         <div id="tags-desp-${h(d.row)}"></div>
@@ -1588,6 +1602,14 @@ function renderHistorico(data) {
   `;
   data.despesas.forEach(d => renderHistTags('tags-desp-' + d.row, 'desp:' + d.row));
   data.compras.forEach(c => renderHistTags('tags-compra-' + c.id, 'compra:' + c.id));
+}
+/** O que o valor de um acerto de contas quitou: parcelas (por compra) e o saldo das despesas do mês. */
+function composicaoAcertoHtml(c) {
+  if (!c) return '';
+  const linhas = c.parcelas.map(p => `<li>Parcela de ${h(p.descricao)}: ${fmtBRL(p.valor)}</li>`);
+  if (c.despesas > 0.004 || !linhas.length) linhas.push(`<li>Despesas do mês: ${fmtBRL(c.despesas)}</li>`);
+  return ` · referente a ${labelMes(c.mesRef).toLowerCase()}
+    <ul class="acerto-composicao">${linhas.join('')}</ul>`;
 }
 ACTIONS.adiantarPessoal = async el => {
   const max = Number(el.dataset.max);
@@ -1775,7 +1797,7 @@ ACTIONS.removerPix = async () => {
 
 // ---------- Acertar as contas (painel) ----------
 let ACERTO_ABERTO = null;
-let ACERTO_MES = 'mes'; // 'tudo' ou 'mes' (o mês escolhido em STATE.mesAcerto)
+let ACERTO_MES = 'tudo'; // 'tudo' (padrão: saldo líquido) ou 'mes' (o mês escolhido em STATE.mesAcerto)
 function listaAcertos(d) {
   if (ACERTO_MES === 'tudo') return d.acertos || [];
   const m = (d.meses || {})[STATE.mesAcerto];
@@ -1835,7 +1857,9 @@ function mesesEmAberto(d) {
     .filter(x => x.saldo < -0.004);
 }
 function pendenciasHtml(d) {
-  const lista = mesesEmAberto(d).filter(x => ACERTO_MES === 'tudo' || x.mes !== STATE.mesAcerto);
+  // No saldo total o acerto já é líquido e quita os meses em aberto sozinho: listar cada mês cheio confundiria
+  if (ACERTO_MES === 'tudo') return '';
+  const lista = mesesEmAberto(d).filter(x => x.mes !== STATE.mesAcerto);
   if (!lista.length) return '';
   return `<div class="pendencias"><span class="field-label" style="margin-top:4px">Meses com saldo em aberto</span>
     ${lista.map(x => `<div class="list-row"><div>${labelMes(x.mes)}<div class="sub">você deve</div></div>
