@@ -167,10 +167,6 @@
         <form id="form-nova-casa" novalidate>
           <label for="casa-nome" class="field-label">Nome do grupo</label>
           <input type="text" id="casa-nome" maxlength="40" placeholder="Ex.: Apê da Rua 7, Viagem Chile" autocapitalize="sentences" enterkeyhint="go">
-          <label class="participa-item" style="margin-top:12px">
-            <input type="checkbox" id="casa-pessoais" checked> Incluir despesas pessoais
-          </label>
-          <p class="hint">Cada pessoa ganha um conjunto "Pessoal" só dela: ninguém mais vê e não entra na divisão.</p>
           <button class="primary" type="submit">Criar grupo</button>
           <p class="hint">Você vira administrador(a) e recebe um código para convidar os outros.</p>
           <p class="hint" id="nova-casa-hint" role="status"></p>
@@ -192,7 +188,7 @@
   <!-- APP -->
   <div id="screen-app" class="hidden">
     <header class="topbar">
-      <button type="button" class="who" data-tab="grupos" aria-label="Perfil: todos os grupos e conta">
+      <button type="button" class="who" data-action="menuTopo" data-menu="grupo" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-topo" aria-label="Grupo aberto: configurar ou trocar de grupo">
         <span class="who-badge">
           <svg viewBox="32 32 448 448" aria-hidden="true">
             <path d="M292 96 L168 284 L260 284 L220 416 L344 228 L252 228 Z" fill="#fff"/>
@@ -201,19 +197,21 @@
         <span class="who-text">
           <span class="who-grupo"><span id="who-casa">Rachaê</span>
             <svg class="who-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
-          <span class="who-sub">Perfil · <span id="who-name"></span></span>
+          <span class="who-sub"><span id="who-name"></span></span>
         </span>
       </button>
       <div class="topbar-right">
         <label for="grupo-switcher" class="visually-hidden">Conjunto de despesas</label>
         <select id="grupo-switcher" data-change="onGrupoSwitch"></select>
-        <button class="icon-btn" type="button" data-tab="casa" aria-label="Ajustes deste grupo">
+        <button class="icon-btn" type="button" data-action="menuTopo" data-menu="conta" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-topo" aria-label="Renda e cartões, minha conta">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
         </button>
       </div>
+      <div id="menu-topo" class="menu-topo hidden" role="menu"></div>
     </header>
 
     <main>
+      <div id="voltar-bar" class="hidden"></div>
       <section id="tab-dashboard"></section>
       <section id="tab-despesa" class="hidden"></section>
       <section id="tab-pagamento" class="hidden"></section>
@@ -221,6 +219,7 @@
       <section id="tab-casa" class="hidden"></section>
       <section id="tab-grupos" class="hidden"></section>
       <section id="tab-gastos" class="hidden"></section>
+      <section id="tab-conta" class="hidden"></section>
     </main>
 
     <nav class="tabbar" aria-label="Navegação">
@@ -241,8 +240,8 @@
         Histórico
       </button>
       <button type="button" data-tab="gastos">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
-        Meus gastos
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H18v3"/><rect x="3" y="7.5" width="18" height="12" rx="2.5"/><path d="M16.5 13.5h.01"/></svg>
+        Finanças
       </button>
     </nav>
   </div>

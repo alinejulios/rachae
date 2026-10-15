@@ -46,6 +46,71 @@ service cloud.firestore {
         && str(request.resource.data.casaAtual, 0, 40);
     }
 
+    // ---------------------------------------------------------------- finanças pessoais (aba Finanças)
+    // Só a própria pessoa lê e grava. Nenhum grupo enxerga nada daqui.
+    //   users/{uid}/fontes/{id}       → cartão, conta ou benefício (VR/VA/VT)
+    //   users/{uid}/fixos/{id}        → conta fixa pessoal
+    //   users/{uid}/lancamentos/{id}  → despesa pessoal (à vista ou parcelada)
+    //   users/{uid}/rendas/{id}       → salário e outras rendas
+    //   users/{uid}/vinculos/{chave}  → qual cartão a pessoa usou numa despesa que fica num grupo
+    //   users/{uid}/financas/config   → limites por categoria, categorias, avisos respondidos
+    function mesISO(v) { return v is string && v.matches('^[0-9]{4}-[0-9]{2}$'); }
+    function dia(v) { return v is int && v >= 1 && v <= 31; }
+    // Campos opcionais: d.get(campo, padrão) — ler um campo ausente direto daria erro e negaria a gravação
+    function carimbos(d) {
+      return d.get('criadoEm', request.time) is timestamp && d.get('editadoEm', request.time) is timestamp
+        && d.get('atualizadoEm', request.time) is timestamp;
+    }
+    function fonteOk(d) {
+      return d.keys().hasOnly(['nome', 'tipo', 'fecha', 'vence', 'mensal', 'dia', 'cor', 'arquivada', 'criadoEm', 'editadoEm'])
+        && str(d.nome, 1, 30) && d.tipo in ['credito', 'debito', 'beneficio']
+        && dia(d.get('fecha', 1)) && dia(d.get('vence', 1)) && dia(d.get('dia', 1))
+        && centavos(d.get('mensal', 1)) && d.get('cor', 0) is int
+        && d.get('arquivada', false) is bool && carimbos(d);
+    }
+    function lancamentoOk(d) {
+      return d.keys().hasOnly(['data', 'descricao', 'categoria', 'valor', 'nParcelas', 'parcelaSeguinte', 'fonteId',
+               'adiantamentos', 'legado', 'criadoEm', 'editadoEm'])
+        && dataISO(d.data) && str(d.descricao, 1, 80) && str(d.categoria, 1, 40) && centavos(d.valor)
+        && d.nParcelas is int && d.nParcelas >= 1 && d.nParcelas <= 60
+        && d.get('parcelaSeguinte', false) is bool && str(d.get('fonteId', ''), 0, 40)
+        && d.get('adiantamentos', []) is list && d.get('adiantamentos', []).size() <= 60
+        && d.get('legado', {}) is map && carimbos(d);
+    }
+    function fixoOk(d) {
+      return d.keys().hasOnly(['descricao', 'categoria', 'valor', 'desde', 'ate', 'valores', 'fonteId', 'estimado',
+               'confirmados', 'criadoEm', 'editadoEm'])
+        && str(d.descricao, 1, 80) && str(d.categoria, 1, 40) && centavos(d.valor) && mesISO(d.desde)
+        && mesISO(d.get('ate', '2000-01')) && d.get('valores', []) is list && d.get('valores', []).size() <= 120
+        && str(d.get('fonteId', ''), 0, 40) && d.get('estimado', false) is bool
+        && d.get('confirmados', {}) is map && d.get('confirmados', {}).size() <= 600 && carimbos(d);
+    }
+    function rendaOk(d) {
+      return d.keys().hasOnly(['descricao', 'valor', 'tipo', 'dia', 'mes', 'desde', 'ate', 'criadoEm', 'editadoEm'])
+        && str(d.descricao, 1, 40) && centavos(d.valor) && d.tipo in ['mensal', 'extra']
+        && dia(d.get('dia', 1)) && mesISO(d.get('mes', '2000-01'))
+        && mesISO(d.get('desde', '2000-01')) && mesISO(d.get('ate', '2000-01')) && carimbos(d);
+    }
+    function vinculoOk(d) {
+      return d.keys().hasOnly(['fonteId', 'atualizadoEm']) && str(d.fonteId, 0, 40) && carimbos(d);
+    }
+    function configOk(d) {
+      return d.keys().hasOnly(['limites', 'duplicados', 'categorias', 'atualizadoEm'])
+        && d.get('limites', {}) is map && d.get('limites', {}).size() <= 60
+        && d.get('duplicados', {}) is map && d.get('duplicados', {}).size() <= 200
+        && d.get('categorias', []) is list && d.get('categorias', []).size() <= 60 && carimbos(d);
+    }
+    function finOk(colecao, docId, d) {
+      return (colecao == 'fontes' && fonteOk(d)) || (colecao == 'lancamentos' && lancamentoOk(d))
+        || (colecao == 'fixos' && fixoOk(d)) || (colecao == 'rendas' && rendaOk(d))
+        || (colecao == 'vinculos' && vinculoOk(d)) || (colecao == 'financas' && docId == 'config' && configOk(d));
+    }
+    match /users/{userId}/{colecao}/{docId} {
+      allow read, delete: if signedIn() && uid() == userId
+        && colecao in ['fontes', 'fixos', 'lancamentos', 'rendas', 'vinculos', 'financas'];
+      allow create, update: if signedIn() && uid() == userId && finOk(colecao, docId, request.resource.data);
+    }
+
     // ---------------------------------------------------------------- convites
     // O código (ID do documento) é o segredo: dá para LER um convite sabendo o
     // código, mas nunca LISTAR os convites.

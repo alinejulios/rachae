@@ -1,6 +1,8 @@
 import * as Firebase from './api.js';
 import { api, PESSOAL } from './api.js';
 import { ehMensal } from './calc.js';
+import { montarItens, soma, somarPor, rendaDoMes, mediaAvista, mediaCategoria, avisos, addM, mesFatura, ehCredito, primeiroMes,
+  CATEGORIAS } from './financas.js';
 import { payloadPix, chaveLegivel, TIPOS_CHAVE, nomeParaQR } from './pix.js';
 import qrcode from '../vendor/qrcode.mjs';
 
@@ -35,7 +37,12 @@ const K = {
   installDismissed: 'rachae_install_dismissed',
   parcelaSeguinte: 'rachae_parcela_seguinte',
   gastosDetalhe: 'rachae_gastos_detalhe', // grupos que "Meus gastos" mostra por conjunto
-  gastosOcultos: 'rachae_gastos_ocultos' // grupos escondidos em "Meus gastos"
+  gastosOcultos: 'rachae_gastos_ocultos', // grupos escondidos em "Meus gastos"
+  finAba: 'rachae_fin_aba', // aba aberta em Finanças
+  despDono: 'rachae_desp_dono', // "Nova": 'eu' (Só minha) ou 'grupo'
+  finFonte: 'rachae_fin_fonte', // último cartão/conta usado em despesa pessoal
+  finCategoria: 'rachae_fin_categoria', // última categoria usada em despesa pessoal
+  periodoModo: 'rachae_periodo_modo' // período do Início e de Finanças: 'mes' ou 'ano'
 };
 
 // ---------- Utilidades ----------
@@ -80,12 +87,61 @@ async function withBusy(btn, fn) {
   finally { if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = btn.dataset.label; } }
 }
 
+// ---------- Janelas de confirmação e de pergunta, desenhadas pelo app ----------
+// No lugar de confirm()/prompt() do navegador: alguns navegadores embutidos cancelam essas janelas sozinhos.
+// confirmar(texto) → true/false; perguntar(texto, valor) → texto digitado ou null (cancelado).
+function janela({ texto, campo, valor }) {
+  return new Promise(resolve => {
+    const anterior = document.activeElement;
+    const fundo = document.createElement('div');
+    fundo.className = 'janela-fundo';
+    fundo.innerHTML = `<div class="janela" role="dialog" aria-modal="true" aria-labelledby="janela-texto">
+      <p id="janela-texto"></p>
+      ${campo ? '<input type="text" id="janela-campo" autocomplete="off">' : ''}
+      <div class="btn-row">
+        <button type="button" class="secondary" data-r="0">Cancelar</button>
+        <button type="button" class="primary" data-r="1">OK</button>
+      </div></div>`;
+    fundo.querySelector('#janela-texto').textContent = texto;
+    const input = fundo.querySelector('#janela-campo');
+    if (input) input.value = valor == null ? '' : String(valor);
+    const resposta = ok => (campo ? (ok ? input.value : null) : ok);
+    const fechar = ok => {
+      document.removeEventListener('keydown', tecla, true);
+      fundo.remove();
+      if (anterior && anterior.focus) anterior.focus();
+      resolve(resposta(ok));
+    };
+    const tecla = e => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); fechar(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); fechar(true); }
+    };
+    fundo.addEventListener('click', e => {
+      e.stopPropagation();
+      const b = e.target.closest('[data-r]');
+      if (b) fechar(b.dataset.r === '1');
+      else if (e.target === fundo) fechar(false);
+    });
+    document.addEventListener('keydown', tecla, true);
+    document.body.appendChild(fundo);
+    if (input) { input.focus(); input.select(); } else fundo.querySelector('[data-r="1"]').focus();
+  });
+}
+const confirmar = texto => janela({ texto });
+const perguntar = (texto, valor = '') => janela({ texto, campo: true, valor });
+
 // =================================================================== Delegação de eventos
 // Sem onclick inline: permite uma Content-Security-Policy sem 'unsafe-inline' para scripts.
 const ACTIONS = {};
 document.addEventListener('click', ev => {
   const tabBtn = ev.target.closest('[data-tab]');
-  if (tabBtn) { switchTab(tabBtn.dataset.tab); return; }
+  if (tabBtn) {
+    const tab = tabBtn.dataset.tab;
+    // Ajustes do grupo e Perfil "sobem" por cima da tela atual (com Voltar); o menu de baixo zera o caminho
+    if (!tabBtn.closest('nav.tabbar') && TELAS_QUE_SOBEM.includes(tab) && tab !== STATE.currentTab) subirPara(tab);
+    else switchTab(tab, { manterPilha: tab === STATE.currentTab && !tabBtn.closest('nav.tabbar') });
+    return;
+  }
   const el = ev.target.closest('[data-action]');
   if (el && ACTIONS[el.dataset.action]) { ev.preventDefault(); ACTIONS[el.dataset.action](el, ev); }
 });
@@ -296,7 +352,7 @@ ACTIONS.reenviarConfirmacao = async el => {
 ACTIONS.confirmarMeuEmail = async el => {
   await withBusy(el, async () => {
     try {
-      if (await Firebase.recarregarConfirmacao()) { showToast('Email confirmado!'); renderMeusGrupos(); return; }
+      if (await Firebase.recarregarConfirmacao()) { showToast('Email confirmado!'); redesenharConta(); return; }
       await Firebase.enviarConfirmacaoEmail(linkDeVolta());
       showToast('Enviamos um link para ' + Firebase.usuarioAtual().email + '. Depois de tocar nele, volte aqui.');
     } catch (err) { onApiError(err); }
@@ -364,8 +420,12 @@ function irParaLogin() {
   renderInstallBanner();
 }
 async function goToLogin() {
+  fecharMenuTopo();
   await Firebase.sair().catch(() => {});
   GASTOS.dados = null;
+  FIN_UI.dados = null; FIN_UI.form = null; FIN_UI.ocultas.clear(); FIN_UI.cartOcultos.clear();
+  FIN_CACHE = null;
+  sairDaEdicao();
   store.remove(K.pessoa);
   irParaLogin();
 }
@@ -460,7 +520,7 @@ ACTIONS.submit_form_nova_casa = async form => {
   const user = Firebase.usuarioAtual();
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      await Firebase.criarCasa($('casa-nome').value, user.displayName || user.email.split('@')[0], $('casa-pessoais').checked);
+      await Firebase.criarCasa($('casa-nome').value, user.displayName || user.email.split('@')[0], false);
       await abrirCasa(user);
       switchTab('casa');
       showToast('Grupo criado! Agora convide as pessoas.');
@@ -483,7 +543,7 @@ function enterApp(nome) {
   carregarConvitesPendentes().then(() => { if ($('convites-pendentes')) $('convites-pendentes').innerHTML = convitesPendentesHtml(CONVITES_PENDENTES); });
 }
 ACTIONS.logout = async () => {
-  if (!confirm('Sair deste aparelho?')) return;
+  if (!await confirmar('Sair deste aparelho?')) return;
   await goToLogin();
 };
 ACTIONS.refresh = () => refreshCurrentTabData();
@@ -500,7 +560,9 @@ async function atualizarAoVivo() {
     if (STATE.casa) $('who-casa').textContent = Firebase.casaAtual().nome;
     const saiuDaCasa = !meuNome;
     if (saiuDaCasa) { showToast('Você não faz mais parte deste grupo.', true); goToLogin(); return; }
-    if (['dashboard', 'historico', 'casa', 'grupos', 'gastos'].includes(STATE.currentTab)) refreshCurrentTabData();
+    // Finanças com um formulário de ajustes aberto: não redesenha (para não apagar o que está sendo digitado)
+    if (STATE.currentTab === 'gastos' && FIN_UI.form) return;
+    if (['dashboard', 'historico', 'casa', 'grupos', 'gastos', 'conta'].includes(STATE.currentTab)) refreshCurrentTabData();
   } catch (err) { /* sem conexão: tenta na próxima mudança */ }
 }
 
@@ -515,13 +577,11 @@ async function loadGrupos() {
   // Ao abrir outro grupo, vai para o painel dele (exceto logo após criar, que abre os ajustes)
   switchTab(STATE.currentTab === 'casa' ? 'casa' : 'dashboard');
 }
-function pessoaisLigadas() { return !!(STATE.config && STATE.config.despesasPessoais); }
-function noPessoal() { return STATE.grupoAtual === PESSOAL && pessoaisLigadas(); }
 function applyGrupos(grupos) {
   STATE.grupos = grupos || [];
   const saved = store.get(chaveGrupo());
   const meusGrupos = STATE.grupos.filter(g => g.membros.indexOf(STATE.pessoa) >= 0);
-  const valido = saved && (STATE.grupos.some(g => g.nome === saved) || (saved === PESSOAL && pessoaisLigadas()));
+  const valido = saved && STATE.grupos.some(g => g.nome === saved);
   STATE.grupoAtual = valido ? saved
     : (meusGrupos[0] ? meusGrupos[0].nome : (STATE.grupos[0] ? STATE.grupos[0].nome : null));
   renderGrupoSwitcher();
@@ -529,7 +589,6 @@ function applyGrupos(grupos) {
 function renderGrupoSwitcher() {
   const sel = $('grupo-switcher');
   const opcoes = STATE.grupos.map(g => ({ valor: g.nome, rotulo: g.nome }));
-  if (pessoaisLigadas()) opcoes.push({ valor: PESSOAL, rotulo: 'Pessoal (só você)' });
   sel.classList.toggle('hidden', opcoes.length <= 1);
   if (!opcoes.length) { sel.innerHTML = '<option value="">Sem conjuntos</option>'; return; }
   sel.innerHTML = opcoes.map(o =>
@@ -541,7 +600,7 @@ ACTIONS.onGrupoSwitch = sel => {
   refreshCurrentTabData();
 };
 function refreshCurrentTabData() {
-  switchTab(STATE.currentTab, { keepScroll: true });
+  switchTab(STATE.currentTab, { keepScroll: true, manterPilha: true });
 }
 function grupoMembros(nomeGrupo) {
   const g = STATE.grupos.find(g => g.nome === nomeGrupo);
@@ -627,10 +686,193 @@ ACTIONS.removeDraftTag = el => {
   renderTagEditor(id);
 };
 
+// =================================================================== Período (Início e Finanças)
+// Um controle só ("Mês | Ano todo" e ‹ período ›) vale para a tela inteira e é o mesmo nas duas telas.
+// O modo fica lembrado neste aparelho; o mês volta para o atual sempre que o app abre.
+const PERIODO = { modo: store.get(K.periodoModo, 'mes') === 'ano' ? 'ano' : 'mes', mes: mesAtualKey() };
+function periodo() {
+  const ano = PERIODO.mes.slice(0, 4), porAno = PERIODO.modo === 'ano';
+  const meses = porAno ? Array.from({ length: 12 }, (_, i) => ano + '-' + String(i + 1).padStart(2, '0')) : [PERIODO.mes];
+  return { mes: PERIODO.mes, ano, porAno, meses,
+    noPeriodo: i => (porAno ? String(i.mes).startsWith(ano + '-') : i.mes === PERIODO.mes),
+    rotulo: porAno ? ano : labelMes(PERIODO.mes), curto: porAno ? ano : MESES_LONGOS[Number(PERIODO.mes.slice(5)) - 1].toLowerCase() };
+}
+function periodoHtml() {
+  const p = periodo(), atual = mesAtualKey();
+  const sub = p.porAno ? (p.ano === atual.slice(0, 4) ? 'ano atual · com o que já está previsto' : p.ano > atual.slice(0, 4) ? 'previsão' : 'ano fechado')
+    : (p.mes === atual ? 'mês atual' : p.mes > atual ? 'previsão' : 'mês fechado');
+  const passo = p.porAno ? 'Ano' : 'Mês';
+  return `<div class="periodo">
+    <div class="segmented" role="radiogroup" aria-label="Período" style="position:static;margin-bottom:8px">
+      <button type="button" role="radio" aria-checked="${!p.porAno}" class="${p.porAno ? '' : 'active'}" data-action="periodoModo" data-k="mes">Mês</button>
+      <button type="button" role="radio" aria-checked="${p.porAno}" class="${p.porAno ? 'active' : ''}" data-action="periodoModo" data-k="ano">Ano todo</button>
+    </div>
+    <div class="fin-mesnav">
+      <button type="button" data-action="periodoPasso" data-k="-1" aria-label="${passo} anterior">‹</button>
+      <div class="mes">${h(p.rotulo)}<small>${h(sub)}</small></div>
+      <button type="button" data-action="periodoPasso" data-k="1" aria-label="Próximo ${passo.toLowerCase()}">›</button>
+    </div>
+  </div>`;
+}
+/** Redesenha a tela aberta com o período novo (sem buscar os dados de novo). */
+function aplicarPeriodo() {
+  if (STATE.currentTab === 'dashboard' && STATE.dashboard) renderDashboard(STATE.dashboard);
+  if (STATE.currentTab === 'gastos' && FIN_UI.dados) desenharFinancas();
+}
+ACTIONS.periodoModo = el => {
+  if (PERIODO.modo === el.dataset.k) return;
+  PERIODO.modo = el.dataset.k;
+  store.set(K.periodoModo, PERIODO.modo);
+  aplicarPeriodo();
+};
+ACTIONS.periodoPasso = el => {
+  PERIODO.mes = addM(PERIODO.mes, Number(el.dataset.k) * (PERIODO.modo === 'ano' ? 12 : 1));
+  aplicarPeriodo();
+};
+/** Abre um mês (ex.: tocar numa barra do gráfico por mês). */
+function irParaMes(mes) {
+  PERIODO.modo = 'mes';
+  PERIODO.mes = mes;
+  store.set(K.periodoModo, 'mes');
+  aplicarPeriodo();
+  window.scrollTo(0, 0);
+}
+ACTIONS.periodoIr = el => irParaMes(el.dataset.mes);
+
 // =================================================================== Navegação
+// Telas que "sobem" por cima de outra (Ajustes do grupo, Perfil, Renda e cartões, edição, atalhos como
+// "+ Despesa pessoal") guardam de onde vieram; o "‹ Voltar" no topo leva de volta, no mesmo ponto da tela.
+// Tocar no menu de baixo zera o caminho.
+const TELAS_QUE_SOBEM = ['casa', 'grupos', 'conta'];
+const NOMES_TELA = { dashboard: 'Início', despesa: 'Nova', pagamento: 'Pagar', historico: 'Histórico', gastos: 'Finanças',
+  casa: 'Configurações do grupo', grupos: 'Meus grupos', conta: 'Minha conta' };
+let NAV = [];
+const ondeEstou = () => ({ tab: STATE.currentTab, finAba: FIN_UI.aba, scroll: window.scrollY });
+// Cada passo do caminho também vira uma entrada no histórico do navegador: assim o botão/gesto de voltar
+// do Android e o deslizar da borda no Safari do iPhone fazem o mesmo que o "‹ Voltar" da tela.
+let HIST_EXTRA = 0;   // entradas que o app pôs no histórico e ainda não foram consumidas
+let IGNORAR_POP = 0;  // "voltas" no histórico feitas pelo próprio app (o popstate delas não navega)
+try { history.scrollRestoration = 'manual'; } catch (e) {}
+function empilhar() {
+  NAV.push(ondeEstou());
+  try { history.pushState({ rachae: NAV.length }, ''); HIST_EXTRA++; } catch (e) {}
+}
+/** Tira do histórico do navegador `n` entradas do app, sem navegar (o caminho já foi desfeito na tela). */
+function descartarHistorico(n) {
+  n = Math.min(n, HIST_EXTRA);
+  if (n <= 0) return;
+  HIST_EXTRA -= n;
+  IGNORAR_POP++;
+  history.go(-n);
+}
+window.addEventListener('popstate', () => {
+  if (IGNORAR_POP) { IGNORAR_POP--; return; }
+  if (HIST_EXTRA > 0) HIST_EXTRA--;
+  if (NAV.length) voltar(); // botão/gesto de voltar do celular
+});
+function subirPara(tab, opts = {}) {
+  empilhar();
+  switchTab(tab, { ...opts, manterPilha: true });
+}
+/** "‹ Voltar" da tela (e salvar/cancelar uma edição): volta e consome a entrada do histórico correspondente. */
+function voltarTela(padrao) {
+  voltar(padrao);
+  descartarHistorico(1);
+}
+/** Volta para a tela anterior (ou para `padrao`, se não houver caminho guardado). */
+function voltar(padrao = 'dashboard') {
+  const semCaminho = STATE.currentTab === 'gastos' && FIN_UI.aba === 'config' ? { tab: 'gastos', finAba: store.get(K.finAba, 'resumo'), scroll: 0 } : null;
+  const destino = NAV.pop() || semCaminho || { tab: padrao, scroll: 0 };
+  sairDaEdicao();
+  if (destino.tab === 'gastos' && destino.finAba) { FIN_UI.aba = destino.finAba; FIN_UI.form = null; }
+  switchTab(destino.tab, { manterPilha: true, keepScroll: true });
+  // Telas que carregam dados desenham um pouco depois: volta ao ponto onde estava quando terminarem
+  [0, 250, 600].forEach(ms => setTimeout(() => { if (STATE.currentTab === destino.tab) window.scrollTo(0, destino.scroll || 0); }, ms));
+}
+ACTIONS.voltar = () => voltarTela();
+function atualizarVoltar() {
+  const bar = $('voltar-bar');
+  if (!bar) return;
+  let topo = NAV[NAV.length - 1];
+  // Renda e cartões sem caminho guardado: o Voltar leva para Finanças
+  if (!topo && STATE.currentTab === 'gastos' && FIN_UI.aba === 'config') topo = { tab: 'gastos', finAba: store.get(K.finAba, 'resumo') };
+  bar.classList.toggle('hidden', !topo);
+  if (!topo) { bar.innerHTML = ''; return; }
+  const nome = topo.tab === 'gastos' && topo.finAba === 'config' ? 'Renda e cartões' : NOMES_TELA[topo.tab] || 'Voltar';
+  bar.innerHTML = `<button type="button" class="voltar-btn" data-action="voltar" aria-label="Voltar para ${h(nome)}">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>${h(nome)}</button>`;
+}
+// ---------- Menus do topo
+// Nome do grupo (esquerda): configurações do grupo e troca de grupo. Engrenagem (direita): o que é seu —
+// Renda e cartões (a mesma tela do atalho em Finanças) e Minha conta.
+let MENU_TOPO = null; // null | 'grupo' | 'conta'
+function fecharMenuTopo() {
+  MENU_TOPO = null;
+  const m = $('menu-topo');
+  if (m) { m.classList.add('hidden'); m.innerHTML = ''; }
+  document.querySelectorAll('[data-action="menuTopo"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+}
+const itemMenu = (icone, titulo, sub, attrs) => `<button type="button" class="menu-item" role="menuitem" ${attrs}>
+  <span class="menu-ic" aria-hidden="true">${icone}</span><span class="menu-txt">${h(titulo)}${sub ? `<small>${h(sub)}</small>` : ''}</span></button>`;
+async function abrirMenuTopo(qual, botao) {
+  if (MENU_TOPO === qual) { fecharMenuTopo(); return; }
+  fecharMenuTopo();
+  MENU_TOPO = qual;
+  botao.setAttribute('aria-expanded', 'true');
+  const m = $('menu-topo');
+  m.className = 'menu-topo ' + (qual === 'grupo' ? 'esq' : 'dir');
+  const casa = Firebase.casaAtual();
+  if (qual === 'conta') {
+    m.innerHTML = `
+      ${itemMenu('💳', 'Renda e cartões', 'Salário, benefícios, cartões e limites', 'data-action="abrirRendaCartoes"')}
+      ${itemMenu('👤', 'Minha conta', 'Nome, email, senha e chave Pix', 'data-action="menuIr" data-ir="conta"')}`;
+    return;
+  }
+  const outros = casas => casas.filter(c => !casa || c.id !== casa.id);
+  const desenhar = casas => {
+    if (MENU_TOPO !== 'grupo') return;
+    m.innerHTML = `
+      <div class="menu-titulo">${h(casa ? casa.nome : 'Grupo')}${Firebase.souDono() ? '<span class="badge">admin</span>' : ''}</div>
+      ${itemMenu('⚙️', 'Configurações do grupo', 'Pessoas, convites e conjuntos de despesas', 'data-action="menuIr" data-ir="casa"')}
+      <div class="menu-sep"></div>
+      <div class="menu-rotulo">Trocar de grupo</div>
+      ${casas === null ? '<p class="menu-vazio">Carregando…</p>'
+        : outros(casas).map(c => itemMenu('↔', c.nome, c.souDono ? 'admin' : '', `data-action="trocarCasa" data-id="${h(c.id)}"`)).join('')
+          || '<p class="menu-vazio">Você só está neste grupo.</p>'}
+      ${itemMenu('+', 'Criar ou entrar em outro grupo', '', 'data-action="menuIr" data-ir="grupos"')}`;
+  };
+  desenhar(null);
+  desenhar(await Firebase.minhasCasas().catch(() => []));
+}
+ACTIONS.menuTopo = (el, ev) => { ev.stopPropagation(); abrirMenuTopo(el.dataset.menu, el); };
+ACTIONS.menuIr = el => {
+  const tab = el.dataset.ir;
+  fecharMenuTopo();
+  if (tab === STATE.currentTab) return;
+  subirPara(tab);
+};
+ACTIONS.abrirRendaCartoes = () => {
+  fecharMenuTopo();
+  if (STATE.currentTab === 'gastos' && FIN_UI.aba === 'config') return;
+  empilhar();
+  FIN_UI.aba = 'config';
+  FIN_UI.form = null;
+  switchTab('gastos', { manterPilha: true });
+};
+// Fecha o menu ao tocar fora dele ou com Esc
+document.addEventListener('click', ev => {
+  if (MENU_TOPO && !ev.target.closest('#menu-topo') && !ev.target.closest('[data-action="menuTopo"]')) fecharMenuTopo();
+}, true);
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && MENU_TOPO) fecharMenuTopo(); });
+
 function switchTab(tab, opts = {}) {
+  if (!opts.manterPilha) { NAV = []; descartarHistorico(HIST_EXTRA); }
+  // Finanças pelo menu de baixo abre sempre a tela de Finanças (na última aba usada), nunca Renda e cartões
+  if (tab === 'gastos' && !opts.manterPilha && FIN_UI.aba === 'config') { FIN_UI.aba = store.get(K.finAba, 'resumo'); FIN_UI.form = null; }
   STATE.currentTab = tab;
-  ['dashboard', 'despesa', 'pagamento', 'historico', 'casa', 'grupos', 'gastos'].forEach(t => {
+  document.body.classList.toggle('na-financas', tab === 'gastos'); // Finanças junta todos os grupos: o seletor de conjunto não vale lá
+  fecharMenuTopo();
+  ['dashboard', 'despesa', 'pagamento', 'historico', 'casa', 'grupos', 'gastos', 'conta'].forEach(t => {
     $('tab-' + t).classList.toggle('hidden', t !== tab);
   });
   document.querySelectorAll('nav.tabbar button').forEach(b => {
@@ -646,7 +888,9 @@ function switchTab(tab, opts = {}) {
   if (tab === 'historico') loadHistorico();
   if (tab === 'casa') renderCasa();
   if (tab === 'grupos') renderMeusGrupos();
+  if (tab === 'conta') renderMinhaConta();
   if (tab === 'gastos') renderMeusGastos();
+  atualizarVoltar();
 }
 
 // =================================================================== Dashboard
@@ -674,8 +918,12 @@ function statusIconSvg(kind) {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5 11 15l4.5-6"/></svg>';
 }
 function renderDashboard(d) {
-  if (d.pessoalMode) { renderDashboardPessoal(d); return; }
-  if (!STATE.mesAcerto || !mesesComSaldo(d).includes(STATE.mesAcerto)) STATE.mesAcerto = mesAtualKey();
+  // Período único do topo: "Mês" mostra só o mês escolhido; "Ano todo" mostra o saldo total e os gráficos do ano
+  const P = periodo();
+  ACERTO_MES = P.porAno ? 'tudo' : 'mes';
+  STATE.mesAcerto = P.mes;
+  STATE.anoSelecionado = Number(P.ano);
+  STATE.mesSelecionado = P.porAno ? 'ano:' + P.ano : P.mes;
   const el = $('tab-dashboard');
   const p = d.pessoal || { saldoGeral: 0, saldoAv: 0, saldoParc: 0 };
   // O topo segue o período do acerto: saldo total ou só o do mês escolhido
@@ -689,24 +937,14 @@ function renderDashboard(d) {
   const grupoLabel = d.grupoAtual ? ' · ' + d.grupoAtual : '';
   const naoEhMembro = d.grupoAtual && !d.pessoal;
 
-  const anos = Array.from(new Set((d.evolucaoMensal || []).map(m => Number(m.mes.slice(0, 4)))));
-  if (anos.indexOf(anoAtual()) === -1) anos.push(anoAtual());
-  anos.sort((a, b) => b - a);
-  if (!STATE.anoSelecionado || anos.indexOf(STATE.anoSelecionado) === -1) STATE.anoSelecionado = anoAtual();
-
-  const meses = Object.keys(d.catPorMes || {});
-  if (meses.indexOf(mesAtualKey()) === -1) meses.push(mesAtualKey());
-  meses.sort().reverse();
-  if (!STATE.mesSelecionado || (STATE.mesSelecionado !== 'todos' && meses.indexOf(STATE.mesSelecionado) === -1)) {
-    STATE.mesSelecionado = mesAtualKey();
-  }
   const nReemb = (d.reembolsosPorPessoa || []).length;
 
   el.innerHTML = `
     <div id="install-card"></div>
     <div id="convites-pendentes">${convitesPendentesHtml(CONVITES_PENDENTES)}</div>
+    ${periodoHtml()}
     <div class="card hero">
-      <div class="label">${porMes ? 'Seu saldo em ' + labelMes(STATE.mesAcerto).toLowerCase() : 'Seu saldo geral'}${h(grupoLabel)}</div>
+      <div class="label">${porMes ? 'Seu saldo em ' + labelMes(STATE.mesAcerto).toLowerCase() : 'Seu saldo total'}${h(grupoLabel)}</div>
       <div class="value ${statusClass}">${fmtBRL(Math.abs(saldoTopo))}</div>
       <div class="status ${statusClass}">${statusIconSvg(statusKind)}${statusLabel}</div>
       ${naoEhMembro ? `<p class="hint">Você não participa do conjunto "${h(d.grupoAtual)}".</p>` : ''}
@@ -716,8 +954,8 @@ function renderDashboard(d) {
           : saldoTileHtml('Vencido até agora', saldoNosMeses(d, m => m <= mesAtualKey()))
           + saldoTileHtml('Parcelas a vencer', saldoNosMeses(d, m => m > mesAtualKey()))}
       </div>
-      <p class="hint" style="margin:10px 0 0;">Já descontado o que te devem do que você deve. O valor cheio de cada parcela fica na aba Pagar.</p>`}
-      ${periodoSelectHtml(d, 'margin-top:12px')}
+      <p class="hint" style="margin:10px 0 0;">Já descontado o que te devem do que você deve. O valor cheio de cada parcela fica na aba Pagar.${
+        porMes ? '' : ' Em "Ano todo", saldos e acertos são o total de todos os meses: dívida não zera na virada do ano.'}</p>`}
     </div>
 
     <div class="card">
@@ -726,10 +964,7 @@ function renderDashboard(d) {
     </div>
 
     <div class="card">
-      <div class="chart-head">
-        <h3>Acertar as contas</h3>
-        ${periodoSelectHtml(d)}
-      </div>
+      <h3>Acertar as contas${porMes ? ' de ' + labelMes(STATE.mesAcerto).toLowerCase() : ''}</h3>
       <p class="hint" style="margin:0 0 10px;">${ACERTO_MES === 'tudo'
         ? 'Já descontado o que cada um deve ao outro, em todos os meses: o menor número de Pix para deixar todo mundo quitado.'
         : 'Quem paga quem só pelo que é deste mês. Cada Pix registrado abate o saldo do mês e o total.'}</p>
@@ -739,25 +974,14 @@ function renderDashboard(d) {
     </div>
 
     <div class="card">
-      <div class="chart-head">
-        <h3>Gastos por mês</h3>
-        <select id="ano-select" class="chart-select" data-change="onAnoChange" aria-label="Ano">
-          ${anos.map(a => `<option value="${a}" ${a === STATE.anoSelecionado ? 'selected' : ''}>${a}</option>`).join('')}
-        </select>
-      </div>
+      <h3>Gastos por mês em ${P.ano}</h3>
       <div class="chart-box" style="height:220px"><canvas id="chart-mensal"></canvas></div>
       <p class="empty hidden" id="chart-mensal-empty">Sem lançamentos neste ano ainda.</p>
       <p class="hint" id="mensal-comparacao-hint"></p>
     </div>
 
     <div class="card">
-      <div class="chart-head">
-        <h3>Categorias</h3>
-        <select id="mes-select" class="chart-select" data-change="onMesChange" aria-label="Mês">
-          <option value="todos" ${STATE.mesSelecionado === 'todos' ? 'selected' : ''}>Todos os meses</option>
-          ${meses.map(m => `<option value="${m}" ${m === STATE.mesSelecionado ? 'selected' : ''}>${labelMes(m)}</option>`).join('')}
-        </select>
-      </div>
+      <h3>Categorias · ${h(P.porAno ? P.ano : P.rotulo.toLowerCase())}</h3>
       <div class="chart-box" style="height:300px"><canvas id="chart-categoria-mes"></canvas></div>
       <p class="empty hidden" id="chart-categoria-mes-empty">Sem despesas neste período ainda.</p>
     </div>
@@ -790,75 +1014,12 @@ function itensDoMes(d, filtro) {
   return itens.filter(filtro).reduce((t, x) => t + Math.round(x.valor * 100), 0) / 100;
 }
 /** Seletor do período (tudo ou um mês): o mesmo no topo e no acerto, um muda o outro. */
-function periodoSelectHtml(d, estilo) {
-  return `<select class="chart-select" data-change="escolherPeriodoAcerto" aria-label="Período do saldo"${estilo ? ` style="${estilo}"` : ''}>
-    <option value="tudo" ${ACERTO_MES === 'tudo' ? 'selected' : ''}>Tudo (saldo total)</option>
-    ${mesesComSaldo(d).map(m => `<option value="${m}" ${ACERTO_MES === 'mes' && m === STATE.mesAcerto ? 'selected' : ''}>${labelMes(m)}</option>`).join('')}
-  </select>`;
-}
 function saldoTileHtml(rotulo, v) {
   const kind = v > 0.005 ? 'good' : (v < -0.005 ? 'critical' : 'neutral');
   const sub = { good: 'a receber', critical: 'a pagar', neutral: 'quitado' }[kind];
   return `<div class="stat-tile"><div class="l">${rotulo}</div>
     <div class="v status-${kind}">${fmtBRL(Math.abs(v))}</div><div class="l" style="font-weight:600">${sub}</div></div>`;
 }
-function seletoresGraficos(d) {
-  const anos = Array.from(new Set((d.evolucaoMensal || []).map(m => Number(m.mes.slice(0, 4)))));
-  if (anos.indexOf(anoAtual()) === -1) anos.push(anoAtual());
-  anos.sort((a, b) => b - a);
-  if (!STATE.anoSelecionado || anos.indexOf(STATE.anoSelecionado) === -1) STATE.anoSelecionado = anoAtual();
-  const meses = Object.keys(d.catPorMes || {});
-  if (meses.indexOf(mesAtualKey()) === -1) meses.push(mesAtualKey());
-  meses.sort().reverse();
-  if (!STATE.mesSelecionado || (STATE.mesSelecionado !== 'todos' && meses.indexOf(STATE.mesSelecionado) === -1)) {
-    STATE.mesSelecionado = mesAtualKey();
-  }
-  return { anos, meses };
-}
-// Conjunto pessoal: só os gastos da própria pessoa, sem saldos nem divisão
-function renderDashboardPessoal(d) {
-  const { anos, meses } = seletoresGraficos(d);
-  $('tab-dashboard').innerHTML = `
-    <div id="install-card"></div>
-    <div class="card hero">
-      <div class="label">Seus gastos pessoais em ${MESES_LONGOS[new Date().getMonth()].toLowerCase()} (com parcelas do mês)</div>
-      <div class="value">${fmtBRL(d.totalMes)}</div>
-      <div class="status status-neutral">🔒 Só você vê</div>
-      <div class="stat-row">
-        <div class="stat-tile"><div class="l">Lançamentos no mês</div><div class="v">${d.qtdMes}</div></div>
-        <div class="stat-tile"><div class="l">Parcelas a vencer</div><div class="v">${fmtBRL(d.parcelasFuturas)}</div></div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="chart-head">
-        <h3>Gastos por mês</h3>
-        <select id="ano-select" class="chart-select" data-change="onAnoChange" aria-label="Ano">
-          ${anos.map(a => `<option value="${a}" ${a === STATE.anoSelecionado ? 'selected' : ''}>${a}</option>`).join('')}
-        </select>
-      </div>
-      <div class="chart-box" style="height:220px"><canvas id="chart-mensal"></canvas></div>
-      <p class="empty hidden" id="chart-mensal-empty">Sem gastos pessoais neste ano ainda.</p>
-      <p class="hint" id="mensal-comparacao-hint"></p>
-    </div>
-    <div class="card">
-      <div class="chart-head">
-        <h3>Categorias</h3>
-        <select id="mes-select" class="chart-select" data-change="onMesChange" aria-label="Mês">
-          <option value="todos" ${STATE.mesSelecionado === 'todos' ? 'selected' : ''}>Todos os meses</option>
-          ${meses.map(m => `<option value="${m}" ${m === STATE.mesSelecionado ? 'selected' : ''}>${labelMes(m)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="chart-box" style="height:300px"><canvas id="chart-categoria-mes"></canvas></div>
-      <p class="empty hidden" id="chart-categoria-mes-empty">Sem gastos neste período ainda.</p>
-    </div>
-  `;
-  renderInstallCard();
-  renderChartMensal();
-  renderChartCategoriaMes();
-}
-ACTIONS.onAnoChange = el => { STATE.anoSelecionado = Number(el.value); renderChartMensal(); };
-ACTIONS.onMesChange = el => { STATE.mesSelecionado = el.value; renderChartCategoriaMes(); };
-
 function renderSaldoBars(saldos) {
   const wrap = $('saldos-bars');
   if (!saldos.length) { wrap.innerHTML = '<p class="empty">Sem lançamentos ainda.</p>'; return; }
@@ -978,7 +1139,13 @@ function renderChartCategoriaMes() {
   const d = STATE.dashboard;
   if (!d || !$('chart-categoria-mes') || !chartsReady()) return;
   const mes = STATE.mesSelecionado;
-  const dados = mes === 'todos' ? (d.gastosPorCategoria || []) : ((d.catPorMes && d.catPorMes[mes]) || []);
+  let dados;
+  if (String(mes).startsWith('ano:')) { // ano todo: soma as categorias dos meses daquele ano
+    const ano = mes.slice(4), soma = {};
+    Object.keys(d.catPorMes || {}).filter(m => m.startsWith(ano + '-')).forEach(m =>
+      d.catPorMes[m].forEach(c => { soma[c.categoria] = Math.round(((soma[c.categoria] || 0) + c.valor) * 100) / 100; }));
+    dados = Object.keys(soma).map(categoria => ({ categoria, valor: soma[categoria] })).sort((a, b) => b.valor - a.valor);
+  } else dados = mes === 'todos' ? (d.gastosPorCategoria || []) : ((d.catPorMes && d.catPorMes[mes]) || []);
   if (!toggleChartEmpty('chart-categoria-mes', 'chart-categoria-mes-empty', !dados.length)) return;
   if (!dados.length) return;
 
@@ -1043,26 +1210,45 @@ function moneyInput(id, extraAttrs = '') {
 // Nova despesa: um só formulário. "Parcelado" acrescenta nº de parcelas, 1ª parcela no mês
 // seguinte e a prévia dos meses; por baixo, vira uma compra parcelada.
 let DESP_PARCELADO = false;
-// Editando um lançamento do histórico: { colecao, id, tagKey, dados, parceladoAntes } — null = nova despesa
+// Editando um lançamento do histórico: { colecao, id, tagKey, dados, parceladoAntes, voltar } — null = nova despesa
 let EDITANDO = null;
+// "Só minha" (despesa pessoal, vai para Finanças) ou "De um grupo" (o formulário de sempre); lembrado neste aparelho
+let DESP_DONO = store.get(K.despDono, 'grupo');
+// Despesa pessoal: tipo e cartão/conta escolhidos ('' = Pix / dinheiro)
+const FIN_FORM = { tipo: 'avista', fonte: store.get(K.finFonte, '') };
+// Editando algo de Finanças: { tipo: 'lanc'|'fixo', id, dados } — null = nova
+let EDITANDO_FIN = null;
+// Despesa de grupo paga por você: cartão/conta usado (só você vê; fica em users/{uid}/vinculos)
+let DESP_FONTE = '';
+// Finanças pessoais (cartões, categorias…), mantidas ao vivo pelo api.js
+let FIN_CACHE = null;
+const donoToggleHtml = () => `
+  <div class="segmented" role="radiogroup" aria-label="De quem é a despesa" style="position:static;margin-bottom:8px">
+    <button type="button" role="radio" aria-checked="${DESP_DONO === 'eu'}" class="${DESP_DONO === 'eu' ? 'active' : ''}" data-action="despDono" data-dono="eu">Só minha</button>
+    <button type="button" role="radio" aria-checked="${DESP_DONO !== 'eu'}" class="${DESP_DONO !== 'eu' ? 'active' : ''}" data-action="despDono" data-dono="grupo">De um grupo</button>
+  </div>`;
 function renderDespesaForm() {
   const el = $('tab-despesa');
   const cfg = STATE.config;
-  if (!STATE.grupos.length && !pessoaisLigadas()) {
+  if (!FIN_CACHE) {
+    Firebase.dadosFinancas().then(f => { FIN_CACHE = f; atualizarFontesFin(); atualizarPagoCom(); }).catch(() => {});
+  }
+  if (EDITANDO_FIN || (!EDITANDO && DESP_DONO === 'eu')) { renderFormPessoal(); return; }
+  if (!STATE.grupos.length) {
     el.innerHTML = '<div class="card"><h3>Nova despesa</h3><p class="empty">Nenhum conjunto de despesas ainda. Crie um na tela do grupo (ícone de pessoa, no topo).</p></div>';
     return;
   }
   const ed = EDITANDO && EDITANDO.dados;
   TAG_DRAFTS['desp-tags-editor'] = ed ? getTags(EDITANDO.tagKey).slice() : [];
   // Na edição, o tipo (à vista/parcelado) e o lugar (grupo/pessoal) não mudam: são coleções diferentes
-  const grupoOpts = !ed ? optionsHtml(STATE.grupos.map(g => g.nome), noPessoal() ? null : grupoInicial()) +
-      (pessoaisLigadas() ? `<option value="${PESSOAL}" ${noPessoal() ? 'selected' : ''}>Pessoal (só você)</option>` : '')
+  // Despesa pessoal nova é lançada em "Só minha" (Finanças); "Pessoal" aqui só aparece ao editar uma antiga
+  const grupoOpts = !ed ? optionsHtml(STATE.grupos.map(g => g.nome), grupoInicial())
     : ed.grupo === PESSOAL ? `<option value="${PESSOAL}" selected>Pessoal (só você)</option>`
     : optionsHtml(comAtual(STATE.grupos.map(g => g.nome), ed.grupo), ed.grupo);
   el.innerHTML = `
     <form class="card" data-submit="submitDespesa" novalidate autocomplete="off">
       <h3>${ed ? (DESP_PARCELADO ? 'Editar despesa parcelada' : 'Editar despesa') : 'Nova despesa'}</h3>
-      ${ed ? '<p class="hint">Os saldos de todos serão recalculados com os novos valores.</p>' : ''}
+      ${ed ? '<p class="hint">Os saldos de todos serão recalculados com os novos valores.</p>' : donoToggleHtml()}
       <div class="segmented ${ed ? 'hidden' : ''}" role="radiogroup" aria-label="Forma de pagamento" style="position:static;margin-bottom:6px">
         <button type="button" role="radio" aria-checked="${!DESP_PARCELADO}" class="${DESP_PARCELADO ? '' : 'active'}" data-action="modoPagamento" data-parcelado="0">À vista</button>
         <button type="button" role="radio" aria-checked="${DESP_PARCELADO}" class="${DESP_PARCELADO ? 'active' : ''}" data-action="modoPagamento" data-parcelado="1">Parcelado</button>
@@ -1074,7 +1260,7 @@ function renderDespesaForm() {
       <div id="desp-parcelas" class="${DESP_PARCELADO ? '' : 'hidden'}">
         <label for="desp-nparc">Nº de parcelas</label>
         <input type="text" id="desp-nparc" value="2" inputmode="numeric" pattern="[0-9]*" data-input="updateParcelaPreview">
-        <label class="participa-item" style="margin-top:10px">
+        <label class="participa-item" id="desp-seguinte-box" style="margin-top:10px">
           <input type="checkbox" id="desp-seguinte" data-change="updateParcelaPreview" ${store.get(K.parcelaSeguinte, false) ? 'checked' : ''}>
           1ª parcela só no mês seguinte (fatura seguinte)
         </label>
@@ -1083,7 +1269,7 @@ function renderDespesaForm() {
       <label for="desp-data">${DESP_PARCELADO ? 'Data da compra' : 'Data'}</label>
       <input type="date" id="desp-data" value="${todayStr()}" data-change="updateParcelaPreview">
       <label for="desp-categoria">Categoria</label>
-      <select id="desp-categoria">${optionsHtml(comAtual(cfg.categorias, ed && ed.categoria), ed && ed.categoria)}</select>
+      <select id="desp-categoria" data-change="escolherCategoria" data-antes="${h((ed && ed.categoria) || CATEGORIAS[0])}">${opcoesCategoria(ed && ed.categoria, ed && ed.categoria)}</select>
       <label for="desp-segmento">Segmento</label>
       <select id="desp-segmento" data-change="atualizarValorFixo">${optionsHtml(comAtual(cfg.segmentos, ed && ed.segmento), ed && ed.segmento)}</select>
       <div id="desp-fixo-box" class="hidden">
@@ -1124,6 +1310,7 @@ function preencherEdicao(ed) {
 }
 function preencherPessoasEdicao(ed) {
   if ($('desp-pagopor')) $('desp-pagopor').value = ed.pagoPor;
+  atualizarPagoCom();
   document.querySelectorAll('.desp-participa-input').forEach(i => { i.checked = ed.participantes.includes(i.dataset.nome); });
   updateParticipaHint('desp');
   $('desp-metodo').value = ed.metodo;
@@ -1140,8 +1327,12 @@ function preencherPessoasEdicao(ed) {
 function sairDaEdicao() {
   if (EDITANDO) DESP_PARCELADO = EDITANDO.parceladoAntes;
   EDITANDO = null;
+  EDITANDO_FIN = null;
+  DESP_FONTE = '';
 }
-ACTIONS.cancelarEdicao = () => { sairDaEdicao(); switchTab('historico'); };
+// Volta para a tela de onde a edição veio (Histórico ou Finanças)
+const voltarDaEdicao = () => (EDITANDO && EDITANDO.voltar) || (EDITANDO_FIN ? 'gastos' : 'historico');
+ACTIONS.cancelarEdicao = () => voltarTela(voltarDaEdicao());
 // Troca À vista ⇄ Parcelado sem perder o que já foi digitado
 ACTIONS.modoPagamento = el => {
   const novo = el.dataset.parcelado === '1';
@@ -1196,7 +1387,8 @@ function renderPessoasFields(prefixOrEl) {
   const oque = parcelado ? 'desta compra' : 'desta despesa';
   $(prefix + '-pessoas-fields').innerHTML = `
     <label for="${pagadorId}">${pagadorLabel}</label>
-    <select id="${pagadorId}">${optionsHtml(membros, STATE.pessoa)}</select>
+    <select id="${pagadorId}" data-change="atualizarPagoCom">${optionsHtml(membros, STATE.pessoa)}</select>
+    ${prefix === 'desp' ? '<div id="desp-pagocom"></div>' : ''}
     <span class="field-label">Quem participa ${oque}?</span>
     <div class="participa-grid">
       ${membros.map(n => `
@@ -1216,8 +1408,55 @@ function renderPessoasFields(prefixOrEl) {
   `;
   updateParticipaHint(prefix);
   renderDivisaoFields(prefix);
+  if (prefix === 'desp') atualizarPagoCom();
 }
 ACTIONS.renderPessoasFields = renderPessoasFields;
+/** Chips "Pago com": cartões, contas e benefícios da pessoa + Pix/dinheiro. */
+function pagoComChipsHtml(prefix, atual, comAtalho) {
+  return `<div class="fonte-chips" role="radiogroup" aria-label="Pago com">
+    ${fontesAtivas().map(f => `<button type="button" class="chip toggle" role="radio" data-action="escolherFonte" data-prefix="${prefix}" data-id="${h(f.id)}"
+      aria-pressed="${f.id === atual}"><span class="cor" style="background:${corFonte(f)}"></span>${h(f.nome)}</button>`).join('')}
+    <button type="button" class="chip toggle" role="radio" data-action="escolherFonte" data-prefix="${prefix}" data-id="" aria-pressed="${!atual}">Pix / dinheiro</button>
+    ${comAtalho ? '<button type="button" class="chip" data-action="finIrConfig">+ Cartão</button>' : ''}
+  </div>`;
+}
+ACTIONS.escolherFonte = el => {
+  if (el.dataset.prefix === 'desp') { DESP_FONTE = el.dataset.id; atualizarPagoCom(); return; }
+  FIN_FORM.fonte = el.dataset.id;
+  store.set(K.finFonte, FIN_FORM.fonte);
+  atualizarFontesFin();
+};
+ACTIONS.finIrConfig = () => {
+  empilhar();
+  FIN_UI.aba = 'config';
+  FIN_UI.form = { tipo: 'fonte', id: null };
+  switchTab('gastos', { manterPilha: true });
+};
+const textoFatura = (f, data) => {
+  const mes = mesFatura(f, data);
+  return `O <b>${h(f.nome)}</b> fecha dia ${f.fecha}: esta compra entra na <b>fatura de ${h(nomeMesLongo(mes))}</b>, que vence ${String(f.vence).padStart(2, '0')}/${mes.slice(5)}.`;
+};
+/** Cartão de crédito da despesa de grupo, se quem pagou foi você e você escolheu um cartão. */
+function despCartao() {
+  const pagouEu = $('desp-pagopor') && $('desp-pagopor').value === STATE.pessoa;
+  const f = fontePorId(DESP_FONTE);
+  return pagouEu && ehCredito(f) ? f : null;
+}
+/** Despesa de grupo: "Pago com" só quando quem pagou foi você; com cartão de crédito o "mês seguinte" é calculado. */
+function atualizarPagoCom() {
+  const box = $('desp-pagocom');
+  if (!box) return;
+  const pagouEu = $('desp-pagopor') && $('desp-pagopor').value === STATE.pessoa;
+  if (DESP_FONTE && FIN_CACHE && !fontePorId(DESP_FONTE)) DESP_FONTE = '';
+  box.innerHTML = !pagouEu ? '' : fontesAtivas().length ? `
+    <span class="field-label">Pago com</span>
+    ${pagoComChipsHtml('desp', DESP_FONTE)}
+    <p class="privado">🔒 Só você vê em qual cartão pagou. Na fatura entra o valor inteiro; em Finanças, só a sua parte.</p>
+    <div id="desp-fatura-hint"></div>`
+    : '<p class="privado">Cadastre seus cartões em Finanças › Renda e cartões para dizer em qual pagou (só você vê).</p>';
+  ACTIONS.updateParcelaPreview();
+}
+ACTIONS.atualizarPagoCom = atualizarPagoCom;
 // "Valor fixo" só aparece em despesa à vista do grupo com segmento Mensais
 ACTIONS.atualizarValorFixo = () => {
   const box = $('desp-fixo-box');
@@ -1342,7 +1581,11 @@ function lerFormularioDespesa() {
     grupo: $('desp-grupo').value,
     valorTotal
   };
-  const parcelas = DESP_PARCELADO ? { nParcelas, parcelaSeguinte: $('desp-seguinte').checked } : {};
+  // Pago por você no cartão de crédito: o "mês seguinte" sai do fechamento do cartão
+  const cartao = !pessoal && despCartao();
+  const seguinte = cartao ? mesFatura(cartao, base.data) > base.data.slice(0, 7) : $('desp-seguinte').checked;
+  const parcelas = DESP_PARCELADO ? { nParcelas, parcelaSeguinte: seguinte } : {};
+  if (base.categoria === '__nova__') return { erro: 'Escolha a categoria.' };
   if (pessoal) {
     if (!base.descricao) return { erro: 'Preencha a descrição.' };
     if (!(valorTotal > 0)) return { erro: 'Informe um valor maior que zero.' };
@@ -1364,16 +1607,18 @@ ACTIONS.submitDespesa = async form => {
   const pessoal = payload.grupo === PESSOAL;
   confirmarTagPendente('desp-tags-editor');
   const tags = (TAG_DRAFTS['desp-tags-editor'] || []).slice();
+  const fonteUsada = !pessoal && ((DESP_PARCELADO ? payload.comprador : payload.pagoPor) === STATE.pessoa) ? DESP_FONTE : '';
   if (EDITANDO) {
     const { colecao, id, tagKey } = EDITANDO;
+    const destino = voltarDaEdicao();
     await withBusy(form.querySelector('button[type=submit]'), async () => {
       try {
         await api('editarLancamento', { colecao, id, payload });
+        if (!pessoal) await guardarVinculo(colecao, id, fonteUsada);
         saveTags(tagKey, tags);
         vibrate(20);
         showToast('Alterações salvas.');
-        sairDaEdicao();
-        switchTab('historico');
+        voltarTela(destino);
       } catch (err) { onApiError(err); }
     });
     return;
@@ -1383,38 +1628,194 @@ ACTIONS.submitDespesa = async form => {
       if (DESP_PARCELADO) {
         const res = await api('addCompraParcelada', { payload });
         if (tags.length && res && res.id) saveTags('compra:' + res.id, tags);
+        if (res && res.docId) await guardarVinculo('compras', res.docId, fonteUsada);
         showToast((pessoal ? 'Despesa pessoal parcelada adicionada: ' : 'Despesa parcelada adicionada: ') +
           payload.nParcelas + 'x de ' + fmtBRL(payload.valorTotal / payload.nParcelas) + '.');
       } else {
         const res = await api('addDespesa', { payload });
         if (tags.length && res && res.row) saveTags('desp:' + res.row, tags);
+        if (res && res.row) await guardarVinculo('despesas', res.row, fonteUsada);
         showToast(pessoal ? 'Despesa pessoal adicionada!' : 'Despesa adicionada!');
       }
       vibrate(20);
+      DESP_FONTE = '';
       renderDespesaForm();
     } catch (err) { onApiError(err); }
   });
 };
+/** Guarda (só para você) em qual cartão foi paga uma despesa de grupo. Falhar aqui não desfaz a despesa. */
+async function guardarVinculo(colecao, id, fonteId) {
+  const chave = Firebase.chaveVinculoAberto(colecao, id);
+  const antes = (FIN_CACHE && FIN_CACHE.vinculos && FIN_CACHE.vinculos[chave]) || '';
+  if ((fonteId || '') === antes) return;
+  try { await Firebase.salvarVinculo(chave, fonteId); }
+  catch (err) { showToast('Despesa salva, mas não consegui guardar o cartão usado.', true); }
+}
 ACTIONS.updateParcelaPreview = () => {
+  // Pago por você no cartão de crédito: o checkbox some e a fatura certa aparece
+  const cartao = despCartao();
+  if ($('desp-seguinte-box')) $('desp-seguinte-box').classList.toggle('hidden', !!cartao);
+  const data = ($('desp-data') && $('desp-data').value) || todayStr();
+  if ($('desp-fatura-hint')) $('desp-fatura-hint').innerHTML = cartao ? `<div class="fatura-hint"><span>💳</span><span>${textoFatura(cartao, data)}</span></div>` : '';
   if (!DESP_PARCELADO || !$('desp-parcela-hint')) return;
   const valor = parseMoney($('desp-valor').value) || 0;
   const n = parseInt($('desp-nparc').value, 10) || 0;
   const seguinte = $('desp-seguinte').checked;
-  if (!EDITANDO) store.set(K.parcelaSeguinte, !!seguinte); // lembra a preferência neste aparelho
-  const [a, m] = ($('desp-data').value || todayStr()).split('-').map(Number);
-  const primeira = new Date(a, m - 1 + (seguinte ? 1 : 0), 1);
-  const ultima = new Date(a, m - 1 + (seguinte ? 1 : 0) + Math.max(n, 1) - 1, 1);
-  const mesAno = d => MESES_ABREV[d.getMonth()].toLowerCase() + '/' + d.getFullYear();
+  if (!EDITANDO && !cartao) store.set(K.parcelaSeguinte, !!seguinte); // lembra a preferência neste aparelho
+  const m0 = cartao ? mesFatura(cartao, data) : addM(data.slice(0, 7), seguinte ? 1 : 0);
   $('desp-parcela-hint').textContent = (valor > 0 && n > 0)
-    ? n + 'x de ' + fmtBRL(valor / n) + ' · de ' + mesAno(primeira) + (n > 1 ? ' a ' + mesAno(ultima) : '')
+    ? n + 'x de ' + fmtBRL(valor / n) + ' · de ' + nomeMesCurto(m0) + (n > 1 ? ' a ' + nomeMesCurto(addM(m0, Math.max(n, 1) - 1)) : '')
     : 'Informe o valor total para ver as parcelas.';
+};
+
+// ---------- Despesa pessoal ("Só minha"): vai para Finanças, não entra em grupo nenhum
+function renderFormPessoal() {
+  const el = $('tab-despesa');
+  const ed = EDITANDO_FIN;
+  const d = ed ? ed.dados : null;
+  if (ed && !ed.preparado) {
+    ed.preparado = true;
+    FIN_FORM.tipo = ed.tipo === 'fixo' ? 'fixo' : (d.nParcelas > 1 ? 'parcelado' : 'avista');
+    FIN_FORM.fonte = d.fonteId || '';
+  }
+  const t = FIN_FORM.tipo, fixo = t === 'fixo', parc = t === 'parcelado';
+  const cat = d ? d.categoria : store.get(K.finCategoria, 'Outros');
+  const tipoBtn = (k, n) => `<button type="button" role="radio" aria-checked="${t === k}" class="${t === k ? 'active' : ''}" data-action="finTipo" data-k="${k}">${n}</button>`;
+  el.innerHTML = `
+    <form class="card" data-submit="submitFinanca" novalidate autocomplete="off">
+      <h3>${ed ? (fixo ? 'Editar conta fixa' : 'Editar despesa pessoal') : 'Nova despesa'}</h3>
+      ${ed ? '' : donoToggleHtml()}
+      <div class="segmented ${ed && fixo ? 'hidden' : ''}" role="radiogroup" aria-label="Tipo" style="position:static;margin-bottom:6px">
+        ${tipoBtn('avista', 'À vista')}${tipoBtn('parcelado', 'Parcelado')}${ed ? '' : tipoBtn('fixo', 'Conta fixa')}
+      </div>
+      <label for="fin-descricao">Descrição</label>
+      <input type="text" id="fin-descricao" maxlength="80" placeholder="${fixo ? 'Ex.: Academia, Spotify' : parc ? 'Ex.: Celular novo' : 'Ex.: Farmácia'}"
+        autocapitalize="sentences" enterkeyhint="next" value="${h(d ? d.descricao : '')}">
+      <label for="fin-valor">${fixo ? 'Valor por mês' : 'Valor total'}</label>
+      ${moneyInput('fin-valor', `data-input="finAtualizar" value="${d ? fmtNum(d.valor / 100) : ''}"`)}
+      ${parc ? `<label for="fin-nparc">Nº de parcelas</label>
+        <input type="text" id="fin-nparc" inputmode="numeric" pattern="[0-9]*" data-input="finAtualizar" value="${d && d.nParcelas > 1 ? d.nParcelas : 2}">` : ''}
+      ${fixo ? `<label class="participa-item" style="margin-top:12px"><input type="checkbox" id="fin-estimado" ${d && d.estimado ? 'checked' : ''}>
+        O valor muda todo mês (luz, mercado): estimar pela média e me pedir para confirmar</label>
+        ${ed ? '<p class="hint">Mudar o valor aqui muda todos os meses. Para mudar só a partir de um mês, use "Mudar valor" em Finanças.</p>' : ''}` : ''}
+      <span class="field-label">Pago com</span>
+      <div id="fin-fontes"></div>
+      <div id="fin-fatura-hint"></div>
+      <label class="participa-item hidden" id="fin-seguinte-box" style="margin-top:12px">
+        <input type="checkbox" id="fin-seguinte" data-change="finAtualizar" ${d && d.parcelaSeguinte ? 'checked' : ''}> 1ª parcela só no mês seguinte (fatura seguinte)</label>
+      <p class="hint" id="fin-parcela-hint"></p>
+      <label for="fin-data">${fixo ? 'Começa em' : 'Data'}</label>
+      <input type="date" id="fin-data" data-change="finAtualizar" value="${d ? (fixo ? d.desde + '-01' : d.data) : todayStr()}">
+      <label for="fin-categoria">Categoria</label>
+      <select id="fin-categoria" data-change="escolherCategoria" data-antes="${h(cat)}">${opcoesCategoria(cat, cat)}</select>
+      <p class="hint">🔒 Só você vê. Não entra na divisão de nenhum grupo.</p>
+      <button class="primary" type="submit">${ed ? 'Salvar alterações' : fixo ? 'Adicionar conta fixa' : parc ? 'Adicionar despesa parcelada' : 'Adicionar despesa'}</button>
+      ${ed ? '<button class="secondary" type="button" data-action="cancelarEdicao" style="margin-top:10px">Cancelar</button>' : ''}
+    </form>`;
+  atualizarFontesFin();
+}
+function atualizarFontesFin() {
+  const box = $('fin-fontes');
+  if (!box) return;
+  if (FIN_FORM.fonte && FIN_CACHE && !fontePorId(FIN_FORM.fonte)) FIN_FORM.fonte = '';
+  box.innerHTML = pagoComChipsHtml('fin', FIN_FORM.fonte, true) +
+    (FIN_CACHE && !fontesAtivas().length ? '<p class="hint">Cadastre seus cartões, contas e benefícios para escolher aqui.</p>' : '');
+  ACTIONS.finAtualizar();
+}
+// Regra do "1ª parcela no mês seguinte": some quando é no cartão de crédito (o fechamento decide)
+ACTIONS.finAtualizar = () => {
+  if (!$('fin-data')) return;
+  const f = fontePorId(FIN_FORM.fonte), cartao = ehCredito(f);
+  const t = FIN_FORM.tipo;
+  const data = $('fin-data').value || todayStr();
+  $('fin-seguinte-box').classList.toggle('hidden', t !== 'parcelado' || cartao);
+  $('fin-fatura-hint').innerHTML = cartao ? `<div class="fatura-hint"><span>💳</span><span>${t === 'fixo'
+    ? `Cobrada todo mês na fatura do <b>${h(f.nome)}</b>.` : textoFatura(f, data)}</span></div>` : '';
+  const ph = $('fin-parcela-hint');
+  if (t !== 'parcelado') { ph.textContent = ''; return; }
+  const valor = parseMoney($('fin-valor').value) || 0;
+  const n = parseInt($('fin-nparc').value, 10) || 0;
+  const m0 = primeiroMes(data, f, !cartao && $('fin-seguinte').checked);
+  ph.textContent = valor > 0 && n > 0
+    ? n + 'x de ' + fmtBRL(valor / n) + ' · de ' + nomeMesCurto(m0) + (n > 1 ? ' a ' + nomeMesCurto(addM(m0, n - 1)) : '')
+    : 'Informe o valor total para ver as parcelas.';
+};
+const CAMPOS_FORM = ['descricao', 'valor', 'data', 'nparc', 'categoria'];
+const guardarCampos = prefixo => Object.fromEntries(CAMPOS_FORM.map(c => [c, $(prefixo + '-' + c) ? $(prefixo + '-' + c).value : '']));
+const restaurarCampos = (prefixo, g) => CAMPOS_FORM.forEach(c => { if (g[c] && $(prefixo + '-' + c)) $(prefixo + '-' + c).value = g[c]; });
+ACTIONS.finTipo = el => {
+  if (el.dataset.k === FIN_FORM.tipo) return;
+  const g = guardarCampos('fin');
+  const cat = $('fin-categoria').value;
+  FIN_FORM.tipo = el.dataset.k;
+  renderFormPessoal();
+  restaurarCampos('fin', g);
+  if (cat !== '__nova__') $('fin-categoria').value = cat;
+  ACTIONS.finAtualizar();
+};
+// Troca "Só minha" ⇄ "De um grupo" sem perder o que já foi digitado
+ACTIONS.despDono = el => {
+  const novo = el.dataset.dono;
+  if (novo === DESP_DONO) return;
+  const g = guardarCampos(DESP_DONO === 'eu' ? 'fin' : 'desp');
+  if (novo === 'eu') FIN_FORM.tipo = DESP_PARCELADO ? 'parcelado' : 'avista';
+  else DESP_PARCELADO = FIN_FORM.tipo === 'parcelado';
+  DESP_DONO = novo;
+  store.set(K.despDono, novo);
+  renderDespesaForm();
+  const prefixo = novo === 'eu' ? 'fin' : 'desp';
+  restaurarCampos(prefixo, g);
+  if (novo === 'eu') ACTIONS.finAtualizar(); else { ACTIONS.updateParcelaPreview(); if ($('desp-valor')) ACTIONS.updateDivisaoHintFromValor($('desp-valor')); }
+};
+// "+ Nova categoria…" (nos dois formulários): fica na sua lista e passa a aparecer nos dois
+ACTIONS.escolherCategoria = async el => {
+  if (el.value !== '__nova__') { el.dataset.antes = el.value; return; }
+  const nome = (await perguntar('Nome da nova categoria:') || '').trim().slice(0, 40);
+  if (!nome) { el.value = el.dataset.antes; return; }
+  try {
+    const atuais = (FIN_CACHE && FIN_CACHE.config && FIN_CACHE.config.categorias) || [];
+    await Firebase.salvarCategorias([...atuais, nome]);
+    el.insertAdjacentHTML('afterbegin', `<option value="${h(nome)}">${h(nome)}</option>`);
+    el.value = nome;
+    el.dataset.antes = nome;
+  } catch (err) { el.value = el.dataset.antes; onApiError(err); }
+};
+ACTIONS.submitFinanca = async form => {
+  const t = FIN_FORM.tipo;
+  const ed = EDITANDO_FIN;
+  const descricao = $('fin-descricao').value.trim();
+  const valor = parseMoney($('fin-valor').value);
+  const categoria = $('fin-categoria').value;
+  const data = $('fin-data').value || todayStr();
+  const n = t === 'parcelado' ? parseInt($('fin-nparc').value, 10) : 1;
+  const erro = !descricao ? 'Preencha a descrição.' : !(valor > 0) ? 'Informe um valor maior que zero.'
+    : categoria === '__nova__' ? 'Escolha a categoria.'
+    : t === 'parcelado' && !(n >= (ed ? 1 : 2) && n <= 60) ? 'Informe de 2 a 60 parcelas (para 1x, use À vista).' : null;
+  if (erro) { showToast(erro, true); vibrate(60); return; }
+  const cartao = ehCredito(fontePorId(FIN_FORM.fonte));
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      if (t === 'fixo') {
+        await Firebase.salvarFixo({ id: ed && ed.id, descricao, categoria, valor, desde: data.slice(0, 7), fonteId: FIN_FORM.fonte,
+          estimado: $('fin-estimado').checked });
+      } else {
+        await Firebase.salvarLancamento({ id: ed && ed.id, data, descricao, categoria, valor, nParcelas: n,
+          parcelaSeguinte: t === 'parcelado' && !cartao && $('fin-seguinte').checked, fonteId: FIN_FORM.fonte });
+      }
+      store.set(K.finCategoria, categoria);
+      vibrate(20);
+      if (ed) { showToast('Alterações salvas.'); voltarTela('gastos'); return; }
+      showToast(t === 'fixo' ? 'Conta fixa adicionada!' : t === 'parcelado' ? 'Despesa parcelada adicionada: ' + n + 'x de ' + fmtBRL(valor / n) + '.' : 'Despesa pessoal adicionada!');
+      renderFormPessoal();
+    } catch (err) { onApiError(err); }
+  });
 };
 
 // =================================================================== Pagamento de parcela
 // Quem administra pode registrar o pagamento de outra pessoa (null = a própria pessoa)
 let PAG_PESSOA = null;
 function pagandoPorOutra() { return !!PAG_PESSOA && PAG_PESSOA !== STATE.pessoa; }
-function podePagarPorOutra() { return Firebase.souDono() && !noPessoal(); }
+function podePagarPorOutra() { return Firebase.souDono(); }
 async function renderPagamentoForm() {
   const el = $('tab-pagamento');
   if (!podePagarPorOutra() || !grupoMembros(STATE.grupoAtual).includes(PAG_PESSOA)) PAG_PESSOA = null;
@@ -1439,9 +1840,7 @@ function renderPagamentoFormBody(compras) {
       <select id="pag-pessoa" data-change="trocarPessoaPagamento">${optionsHtml(grupoMembros(STATE.grupoAtual), PAG_PESSOA || STATE.pessoa)}</select>
       <p class="hint">Como administrador(a), você pode registrar o pagamento de outra pessoa.</p>` : '';
   if (!compras.length) {
-    el.innerHTML = noPessoal()
-      ? '<div class="card"><h3>Registrar pagamento</h3><p class="empty">O conjunto pessoal não tem parcelas a pagar. Escolha um conjunto compartilhado no topo.</p></div>'
-      : `<div class="card"><h3>Registrar pagamento</h3>${seletor}<p class="empty">${porOutra
+    el.innerHTML = `<div class="card"><h3>Registrar pagamento</h3>${seletor}<p class="empty">${porOutra
         ? h(PAG_PESSOA) + ' não tem nenhuma parcela em aberto neste conjunto.'
         : 'Você não tem nenhuma parcela em aberto neste conjunto 🎉'}</p></div>`;
     return;
@@ -1524,11 +1923,11 @@ ACTIONS.atualizarPixParcela = () => {
 ACTIONS.submitPagamento = async form => {
   const valor = parseMoney($('pag-valor').value);
   if (!(valor > 0)) { showToast('Informe o valor pago.', true); vibrate(60); return; }
-  if (valor > saldoSelecionado() + 0.01 && !confirm('O valor é maior que o saldo devedor. Registrar mesmo assim?')) return;
+  if (valor > saldoSelecionado() + 0.01 && !await confirmar('O valor é maior que o saldo devedor. Registrar mesmo assim?')) return;
   const payload = { compraId: $('pag-compra').value, data: $('pag-data').value || todayStr(), valor };
   if (pagandoPorOutra()) {
     payload.pessoa = PAG_PESSOA;
-    if (!confirm('Registrar pagamento de ' + fmtBRL(valor) + ' feito por ' + PAG_PESSOA + '?')) return;
+    if (!await confirmar('Registrar pagamento de ' + fmtBRL(valor) + ' feito por ' + PAG_PESSOA + '?')) return;
   }
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
@@ -1557,31 +1956,6 @@ async function loadHistorico() {
 }
 function renderHistorico(data) {
   const el = $('tab-historico');
-  if (data.pessoalMode) {
-    el.innerHTML = `<div class="card"><h3>🔒 Despesas pessoais (só você vê)</h3>
-      ${data.despesas.length ? data.despesas.map(d => `
-        <div class="hist-item">
-          <div class="top"><span>${h(d.descricao)}</span><span>${fmtBRL(d.valor)}</span></div>
-          <div class="sub">${h(d.data)} · ${h(d.categoria)}</div>
-          <div id="tags-desp-${h(d.row)}"></div>
-          ${editarBtn('pessoais', d.id, 'desp:' + d.row, true)}
-          ${apagarBtn('pessoais', d.id, true)}
-        </div>`).join('') : '<p class="empty">Nenhuma despesa pessoal lançada ainda.</p>'}</div>
-      <div class="card"><h3>🔒 Parceladas pessoais</h3>
-      ${data.compras.length ? data.compras.map(c => `
-        <div class="hist-item">
-          <div class="top"><span>${h(c.descricao)}</span><span>${fmtBRL(c.valorTotal)}</span></div>
-          <div class="sub">${h(c.data)} · ${h(c.categoria)} · ${c.nParcelas}x de ${fmtBRL(c.valorParcela)} ·
-            ${c.parcelaAtual >= c.nParcelas ? 'quitada' : 'parcela ' + c.parcelaAtual + '/' + c.nParcelas + ' · faltam ' + fmtBRL(c.restante)}</div>
-          <div id="tags-compra-${h(c.row)}"></div>
-          ${c.aVencer > 0 ? `<button type="button" class="del-btn" style="margin-right:14px" data-action="adiantarPessoal" data-id="${h(c.id)}" data-max="${c.aVencer}" data-parcela="${c.valorParcela}">Adiantar parcelas</button>` : ''}
-          ${editarBtn('pessoaisCompras', c.id, 'compra:' + c.row, true)}
-          ${apagarBtn('pessoaisCompras', c.id, true)}
-        </div>`).join('') : '<p class="empty">Nenhuma compra parcelada pessoal ainda.</p>'}</div>`;
-    data.despesas.forEach(d => renderHistTags('tags-desp-' + d.row, 'desp:' + d.row));
-    data.compras.forEach(c => renderHistTags('tags-compra-' + c.row, 'compra:' + c.row));
-    return;
-  }
   const seg = (id, label) => `<button type="button" data-action="showHistSeg" data-seg="${id}" class="${HIST_SEG === id ? 'active' : ''}">${label}</button>`;
   const card = (id, inner) => `<div class="card ${HIST_SEG === id ? '' : 'hidden'}" id="hist-${id}">${inner}</div>`;
   el.innerHTML = `
@@ -1630,7 +2004,7 @@ function composicaoAcertoHtml(c) {
 }
 ACTIONS.adiantarPessoal = async el => {
   const max = Number(el.dataset.max);
-  const resp = prompt('Quantas parcelas adiantar para este mês? (1 a ' + max + ', de ' + fmtBRL(el.dataset.parcela) + ' cada)\n' +
+  const resp = await perguntar('Quantas parcelas adiantar para este mês? (1 a ' + max + ', de ' + fmtBRL(el.dataset.parcela) + ' cada)\n' +
     'Como no cartão, as últimas parcelas passam a contar agora.', String(Math.min(1, max)));
   if (resp === null) return;
   const qtd = parseInt(resp, 10);
@@ -1638,7 +2012,7 @@ ACTIONS.adiantarPessoal = async el => {
   try {
     await api('adiantarParcelasPessoal', { id: el.dataset.id, qtd });
     showToast(qtd + (qtd > 1 ? ' parcelas adiantadas.' : ' parcela adiantada.'));
-    loadHistorico();
+    refreshCurrentTabData();
   } catch (err) { onApiError(err); }
 };
 function editarBtn(colecao, id, tagKey, pode) {
@@ -1648,9 +2022,12 @@ ACTIONS.editarItem = async el => {
   try {
     const dados = await api('lancamento', { colecao: el.dataset.colecao, id: el.dataset.id });
     const parceladoAntes = EDITANDO ? EDITANDO.parceladoAntes : DESP_PARCELADO;
-    EDITANDO = { colecao: el.dataset.colecao, id: el.dataset.id, tagKey: el.dataset.tagkey, dados, parceladoAntes };
+    EDITANDO_FIN = null;
+    EDITANDO = { colecao: el.dataset.colecao, id: el.dataset.id, tagKey: el.dataset.tagkey, dados, parceladoAntes, voltar: el.dataset.voltar || 'historico' };
     DESP_PARCELADO = dados.parcelado;
-    switchTab('despesa', { editando: true });
+    const vinc = ['despesas', 'compras'].includes(EDITANDO.colecao) && FIN_CACHE && FIN_CACHE.vinculos;
+    DESP_FONTE = (vinc && vinc[Firebase.chaveVinculoAberto(EDITANDO.colecao, EDITANDO.id)]) || '';
+    subirPara('despesa', { editando: true });
   } catch (err) { onApiError(err); }
 };
 function apagarBtn(colecao, id, pode) {
@@ -1661,17 +2038,17 @@ ACTIONS.apagarItem = async el => {
     ? 'Esta é uma conta fixa: apagar remove ela E todos os meses lançados automaticamente depois dela.\n' +
       'Para só parar de repetir daqui em diante, use "Encerrar a partir daqui" no mês desejado.\n\nApagar mesmo assim?'
     : 'Apagar este lançamento? Os saldos de todos serão recalculados.';
-  if (!confirm(msg)) return;
+  if (!await confirmar(msg)) return;
   try {
     await api('apagar', { colecao: el.dataset.colecao, id: el.dataset.id });
     showToast('Apagado.');
-    loadHistorico();
+    if (STATE.currentTab === 'historico') loadHistorico();
   } catch (err) { onApiError(err); }
 };
 const mesBR = mes => MESES_LONGOS[Number(mes.slice(5, 7)) - 1].toLowerCase() + '/' + mes.slice(0, 4);
 ACTIONS.mudarValorFixo = async el => {
   const atual = Number(el.dataset.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const resp = prompt('Novo valor a partir de ' + mesBR(el.dataset.mes) + ' (os meses anteriores continuam como estão):', atual);
+  const resp = await perguntar('Novo valor a partir de ' + mesBR(el.dataset.mes) + ' (os meses anteriores continuam como estão):', atual);
   if (resp === null) return;
   const valor = parseMoney(resp);
   if (!(valor > 0)) { showToast('Informe um valor maior que zero.', true); return; }
@@ -1682,7 +2059,7 @@ ACTIONS.mudarValorFixo = async el => {
   } catch (err) { onApiError(err); }
 };
 ACTIONS.encerrarFixa = async el => {
-  if (!confirm('Parar de lançar "' + el.dataset.desc + '" a partir de ' + mesBR(el.dataset.mes) + '? Os meses anteriores continuam no histórico.')) return;
+  if (!await confirmar('Parar de lançar "' + el.dataset.desc + '" a partir de ' + mesBR(el.dataset.mes) + '? Os meses anteriores continuam no histórico.')) return;
   try {
     await api('encerrarFixa', { id: el.dataset.id, mes: el.dataset.mes });
     showToast('Conta fixa encerrada.');
@@ -1728,7 +2105,7 @@ function pixPainelHtml({ pix, valor, paraNome }) {
 ACTIONS.copiar = async el => {
   const texto = el.dataset.texto;
   try { await navigator.clipboard.writeText(texto); showToast(el.dataset.ok || 'Copiado!'); vibrate(15); }
-  catch (e) { prompt('Copie o texto abaixo:', texto); }
+  catch (e) { await perguntar('Copie o texto abaixo:', texto); }
 };
 
 // ---------- Minha chave Pix (ajustes) ----------
@@ -1793,8 +2170,8 @@ ACTIONS.previaNomeQR = () => {
     : qr === nome ? 'O nome cabe inteiro no QR Code.'
     : 'No QR Code (limite de 25 do Banco Central) vai aparecer "' + qr + '". Quem paga vê o nome oficial da conta no banco.';
 };
-ACTIONS.editarPix = () => { EDITANDO_PIX = true; renderMeusGrupos(); };
-ACTIONS.cancelarPix = () => { EDITANDO_PIX = false; renderMeusGrupos(); };
+ACTIONS.editarPix = () => { EDITANDO_PIX = true; redesenharConta(); };
+ACTIONS.cancelarPix = () => { EDITANDO_PIX = false; redesenharConta(); };
 ACTIONS.salvarPix = async form => {
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
@@ -1808,7 +2185,7 @@ ACTIONS.salvarPix = async form => {
   });
 };
 ACTIONS.removerPix = async () => {
-  if (!confirm('Remover sua chave Pix de todos os seus grupos?')) return;
+  if (!await confirmar('Remover sua chave Pix de todos os seus grupos?')) return;
   try { await api('removerPix'); showToast('Chave Pix removida.'); setTimeout(renderMeusGrupos, 300); } catch (err) { onApiError(err); }
 };
 
@@ -1857,13 +2234,6 @@ function acertosHtml(d) {
 ACTIONS.abrirAcerto = el => {
   ACERTO_ABERTO = el.dataset.chave || null;
   $('acertos-lista').innerHTML = acertosHtml(STATE.dashboard);
-};
-ACTIONS.escolherPeriodoAcerto = el => {
-  const v = el.value;
-  ACERTO_MES = v === 'tudo' ? 'tudo' : 'mes';
-  if (v !== 'tudo') STATE.mesAcerto = v;
-  ACERTO_ABERTO = null;
-  renderDashboard(STATE.dashboard);
 };
 // ---------- O que entra no valor do acerto ----------
 const TIPOS_SALDO = [['fixa', 'Contas fixas'], ['parcela', 'Parceladas'], ['avista', 'À vista'], ['acerto', 'Pix já registrados']];
@@ -1940,8 +2310,9 @@ function pendenciasHtml(d) {
       <button type="button" class="del-btn" data-action="irParaMesAcerto" data-mes="${x.mes}">Pagar</button></div></div>`).join('')}</div>`;
 }
 ACTIONS.irParaMesAcerto = el => {
-  ACERTO_MES = 'mes';
-  STATE.mesAcerto = el.dataset.mes;
+  PERIODO.modo = 'mes';
+  PERIODO.mes = el.dataset.mes;
+  store.set(K.periodoModo, 'mes');
   ACERTO_ABERTO = null;
   renderDashboard(STATE.dashboard);
   const card = $('acertos-lista');
@@ -1969,7 +2340,7 @@ ACTIONS.registrarAcerto = async el => {
     ? (partes && partes.length > 1 ? ' (quitando ' + partes.map(x => labelMes(x.mesRef).split(' de ')[0].toLowerCase()).join(', ') + ')' : '')
     : ' referente a ' + labelMes(mesRef).toLowerCase();
   const porOutra = a && a.de !== Firebase.usuarioAtual().uid;
-  if (!a || !confirm('Confirmar que ' + (porOutra ? a.deNome + ' pagou ' : 'você pagou ') + fmtBRL(a.valor) + ' para ' + a.paraNome + quando +
+  if (!a || !await confirmar('Confirmar que ' + (porOutra ? a.deNome + ' pagou ' : 'você pagou ') + fmtBRL(a.valor) + ' para ' + a.paraNome + quando +
     '? Isso abate o saldo total e o do mês.')) return;
   await withBusy(el, async () => {
     try {
@@ -1996,7 +2367,7 @@ async function renderCasa() {
   const eu = Firebase.usuarioAtual();
   el.innerHTML = `
     <h2 class="page-title">Ajustes de ${h(casa.nome)}</h2>
-    <p class="escopo">⚙️ Tudo aqui vale só para este grupo. Para ver todos os seus grupos, trocar de grupo ou sair da conta, toque no nome do grupo no topo (Perfil).</p>
+    <p class="escopo">Tudo aqui vale só para este grupo. Para trocar de grupo, toque no nome dele no topo; sua conta e sua renda ficam na engrenagem ⚙️.</p>
     <div class="card">
       ${EDITANDO_NOME === 'grupo' ? `
         <form data-submit="salvarNomeGrupo" novalidate>
@@ -2016,15 +2387,15 @@ async function renderCasa() {
         <div class="list-row">
           <div>${h(m.nome)}${m.dono ? '<span class="badge">admin</span>' : ''}${m.uid === eu.uid ? '<span class="badge">você</span>' : ''}
             <div class="sub">${h(m.email)}</div></div>
-          ${m.uid === eu.uid ? '<button type="button" class="del-btn" data-tab="grupos">Mudar em Minha conta</button>'
+          ${m.uid === eu.uid ? '<button type="button" class="del-btn" data-tab="conta">Mudar em Minha conta</button>'
             : (dono && !m.dono ? `<button type="button" class="del-btn" data-action="removerMembro" data-uid="${h(m.uid)}" data-nome="${h(m.nome)}">Remover</button>` : '')}
         </div>`).join('')}
     </div>
 
     <div class="card">
       <h3>Meu nome e minha chave Pix</h3>
-      <p class="hint" style="margin-top:0">Valem para todos os seus grupos. Para mudar, use Minha conta, no Perfil.</p>
-      <button class="secondary" type="button" data-tab="grupos">Abrir Minha conta</button>
+      <p class="hint" style="margin-top:0">Valem para todos os seus grupos. Para mudar, use Minha conta, na engrenagem ⚙️ do topo.</p>
+      <button class="secondary" type="button" data-tab="conta">Abrir Minha conta</button>
     </div>
 
     ${dono ? `
@@ -2064,26 +2435,17 @@ async function renderCasa() {
       ${GRUPO_EDITANDO === null ? '<button class="secondary" type="button" data-action="editarGrupo" data-id="">+ Novo conjunto</button>' : ''}
     </div>
 
-    ${dono ? `
-    <div class="card">
-      <h3>Despesas pessoais</h3>
-      <label class="participa-item">
-        <input type="checkbox" data-change="alternarPessoais" ${casa.despesasPessoais ? 'checked' : ''}> Permitir despesas pessoais neste grupo
-      </label>
-      <p class="hint">Cada pessoa ganha um conjunto "Pessoal (só você)": ninguém mais vê, nem quem administra, e não entra na divisão.</p>
-    </div>` : ''}
-
     ${!dono ? `
     <div class="card">
       <h3>Sair do grupo</h3>
       <p class="hint" style="margin-top:0">Você deixa de ver ${h(casa.nome)}. Os lançamentos compartilhados que você fez
-        continuam no histórico do grupo; suas despesas pessoais daqui são apagadas.</p>
+        continuam no histórico do grupo. Suas despesas pessoais antigas daqui ficam guardadas em Finanças.</p>
       <button class="secondary danger" type="button" data-action="sairDaCasa">Sair de ${h(casa.nome)}</button>
     </div>` : `
     <div class="card zona-perigo">
       <h3>Excluir grupo</h3>
       <p class="hint" style="margin-top:0">Apaga ${h(casa.nome)} para todo mundo: lançamentos, conjuntos, convites e pessoas.
-        As despesas pessoais de cada um também somem. <strong>Não dá para desfazer.</strong></p>
+        As despesas pessoais antigas de cada um ficam guardadas em Finanças. <strong>Não dá para desfazer.</strong></p>
       <button class="secondary danger" type="button" data-action="excluirGrupoInteiro">Excluir ${h(casa.nome)}</button>
     </div>`}
   `;
@@ -2096,11 +2458,10 @@ async function renderMeusGrupos() {
   const el = $('tab-grupos');
   const casa = Firebase.casaAtual();
   const eu = Firebase.usuarioAtual();
-  const [casas, convites, meuPix] = await Promise.all([Firebase.minhasCasas().catch(() => []), carregarConvitesPendentes(),
-    api('meuPix').catch(() => null)]);
+  const [casas, convites] = await Promise.all([Firebase.minhasCasas().catch(() => []), carregarConvitesPendentes()]);
   el.innerHTML = `
     <h2 class="page-title">Meus grupos</h2>
-    <p class="page-sub">Toque num grupo para abrir. Os ajustes de cada grupo ficam na engrenagem ⚙️, dentro dele.</p>
+    <p class="page-sub">Toque num grupo para abrir. As configurações de cada grupo ficam no nome dele, no topo.</p>
     ${convitesPendentesHtml(convites)}
     <div class="card">
       ${casas.map(c => `
@@ -2121,12 +2482,20 @@ async function renderMeusGrupos() {
           sem sair dos seus grupos.</p>` : ''}
     </div>
 
-    ${minhaContaHtml(meuPix)}
   `;
   if (OUTRA_CASA !== null) renderOutraCasaForm();
+}
+/** Minha conta (engrenagem do topo): nome, email, Pix, senha e Google — valem para todos os grupos. */
+async function renderMinhaConta() {
+  const el = $('tab-conta');
+  const meuPix = await api('meuPix').catch(() => null);
+  if (STATE.currentTab !== 'conta') return;
+  el.innerHTML = minhaContaHtml(meuPix).replace('class="page-title" style="margin-top:22px"', 'class="page-title"');
   if (EDITANDO_PIX) { ajustarCampoChave(); ACTIONS.previaNomeQR(); }
   prepararRegrasSenha(el);
 }
+/** Redesenha a tela de conta (depois de editar nome, email, senha, Pix ou Google). */
+function redesenharConta() { if (STATE.currentTab === 'conta') renderMinhaConta(); }
 
 // ---------- Minha conta: nome, email, Pix, senha e Google (valem para todos os grupos) ----------
 let EDITANDO_CONTA = ''; // '', 'nome', 'email' ou 'senha'
@@ -2207,7 +2576,7 @@ function minhaContaHtml(meuPix) {
       <button class="secondary danger" type="button" data-action="logout" style="margin-top:0">Sair da conta neste aparelho</button>
     </div>`;
 }
-ACTIONS.editarConta = el => { EDITANDO_CONTA = el.dataset.qual || ''; renderMeusGrupos(); };
+ACTIONS.editarConta = el => { EDITANDO_CONTA = el.dataset.qual || ''; redesenharConta(); };
 ACTIONS.salvarNomeConta = async form => {
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
@@ -2217,7 +2586,7 @@ ACTIONS.salvarNomeConta = async form => {
       showToast(res.conflitos.length
         ? 'Nome salvo, menos em ' + res.conflitos.join(', ') + ': lá já tem alguém com esse nome.'
         : (res.grupos > 1 ? 'Nome atualizado nos seus ' + res.grupos + ' grupos!' : 'Nome atualizado!'), res.conflitos.length > 0);
-      renderMeusGrupos();
+      redesenharConta();
     } catch (err) { onApiError(err); }
   });
 };
@@ -2227,7 +2596,7 @@ ACTIONS.salvarEmailConta = async form => {
       const novo = await Firebase.trocarEmail($('conta-email-novo').value, $('conta-email-senha').value, location.origin + location.pathname);
       EDITANDO_CONTA = '';
       showToast('Link enviado para ' + novo + '. Toque nele para concluir a troca (confira o spam).');
-      renderMeusGrupos();
+      redesenharConta();
     } catch (err) { if (err.code !== 'CANCELADO') onApiError(err); }
   });
 };
@@ -2240,7 +2609,7 @@ ACTIONS.salvarSenhaConta = async form => {
       await Firebase.trocarSenha($('conta-senha-atual') ? $('conta-senha-atual').value : '', nova);
       EDITANDO_CONTA = '';
       showToast('Senha alterada!');
-      renderMeusGrupos();
+      redesenharConta();
     } catch (err) { if (err.code !== 'CANCELADO') onApiError(err); }
   });
 };
@@ -2253,14 +2622,14 @@ ACTIONS.esqueciSenhaAtual = async el => {
 };
 ACTIONS.vincularGoogle = async el => {
   await withBusy(el, async () => {
-    try { await Firebase.vincularGoogle(); showToast('Conta Google ligada! Agora você pode entrar com ela.'); renderMeusGrupos(); }
+    try { await Firebase.vincularGoogle(); showToast('Conta Google ligada! Agora você pode entrar com ela.'); redesenharConta(); }
     catch (err) { if (err.code !== 'CANCELADO') onApiError(err); }
   });
 };
 ACTIONS.desvincularGoogle = async el => {
-  if (!confirm('Desligar a conta Google? Você passa a entrar só com email e senha.')) return;
+  if (!await confirmar('Desligar a conta Google? Você passa a entrar só com email e senha.')) return;
   await withBusy(el, async () => {
-    try { await Firebase.desvincularGoogle(); showToast('Conta Google desligada.'); renderMeusGrupos(); }
+    try { await Firebase.desvincularGoogle(); showToast('Conta Google desligada.'); redesenharConta(); }
     catch (err) { onApiError(err); }
   });
 };
@@ -2305,8 +2674,6 @@ function renderOutraCasaForm() {
     <form data-submit="criarOutraCasa" novalidate>
       <label for="outra-casa-nome">Nome do novo grupo</label>
       <input type="text" id="outra-casa-nome" maxlength="40" placeholder="Ex.: Viagem Chile" autocapitalize="sentences">
-      <label class="participa-item" style="margin-top:12px"><input type="checkbox" id="outra-casa-pessoais" checked> Incluir despesas pessoais</label>
-      <p class="hint">Cada pessoa ganha um conjunto "Pessoal" só dela, que ninguém mais vê.</p>
       <div class="btn-row">
         <button class="secondary" type="button" data-action="outraCasa" data-modo="">Cancelar</button>
         <button class="primary" type="submit">Criar</button>
@@ -2324,19 +2691,6 @@ function renderOutraCasaForm() {
   const input = $('outra-casa-form').querySelector('input');
   if (input) input.focus();
 }
-ACTIONS.alternarPessoais = async el => {
-  const ativo = el.checked;
-  if (!ativo && !confirm('Desligar as despesas pessoais? As que já foram lançadas ficam guardadas, mas o conjunto "Pessoal" some até você ligar de novo.')) {
-    el.checked = true; return;
-  }
-  try {
-    await api('despesasPessoais', { ativo });
-    STATE.config = await api('config');
-    STATE.casa.despesasPessoais = ativo;
-    applyGrupos(STATE.grupos);
-    showToast(ativo ? 'Despesas pessoais ligadas.' : 'Despesas pessoais desligadas.');
-  } catch (err) { el.checked = !ativo; onApiError(err); }
-};
 ACTIONS.outraCasa = el => { OUTRA_CASA = el.dataset.modo || null; renderMeusGrupos(); };
 async function abrirOutraCasa(fn, msg) {
   const user = Firebase.usuarioAtual();
@@ -2356,7 +2710,7 @@ ACTIONS.criarOutraCasa = async form => {
   const user = Firebase.usuarioAtual();
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      await abrirOutraCasa(() => Firebase.criarCasa(nome, STATE.pessoa || user.displayName || user.email.split('@')[0], $('outra-casa-pessoais').checked),
+      await abrirOutraCasa(() => Firebase.criarCasa(nome, STATE.pessoa || user.displayName || user.email.split('@')[0], false),
         'Grupo criado! Convide as pessoas abaixo.');
       switchTab('casa');
     } catch (err) { onApiError(err); }
@@ -2379,7 +2733,7 @@ ACTIONS.trocarCasa = async el => {
 };
 ACTIONS.excluirGrupoInteiro = async el => {
   const nome = Firebase.casaAtual().nome;
-  const digitado = prompt('Isso apaga "' + nome + '" para todo mundo e não pode ser desfeito.\n\nPara confirmar, digite o nome do grupo:');
+  const digitado = await perguntar('Isso apaga "' + nome + '" para todo mundo e não pode ser desfeito.\n\nPara confirmar, digite o nome do grupo:');
   if (digitado === null) return;
   if (digitado.trim().toLowerCase() !== nome.trim().toLowerCase()) { showToast('O nome não confere. Nada foi apagado.', true); return; }
   el.disabled = true;
@@ -2397,7 +2751,7 @@ ACTIONS.excluirGrupoInteiro = async el => {
 };
 ACTIONS.sairDaCasa = async () => {
   const nome = STATE.casa ? STATE.casa.nome : 'este grupo';
-  if (!confirm('Sair de "' + nome + '"? Você deixa de ver o grupo e suas despesas pessoais dele são apagadas.')) return;
+  if (!await confirmar('Sair de "' + nome + '"? Você deixa de ver o grupo. Suas despesas pessoais antigas dele ficam guardadas em Finanças.')) return;
   try {
     await Firebase.sairDaCasa();
     showToast('Você saiu do grupo.');
@@ -2429,7 +2783,7 @@ ACTIONS.excluirGrupo = async el => {
   const aviso = n
     ? 'Excluir o conjunto "' + el.dataset.nome + '" e APAGAR os ' + n + ' lançamento(s) dele? Isso não pode ser desfeito.'
     : 'Excluir o conjunto "' + el.dataset.nome + '"?';
-  if (!confirm(aviso)) return;
+  if (!await confirmar(aviso)) return;
   try {
     await api('excluirGrupo', { id: el.dataset.id });
     GRUPO_EDITANDO = null;
@@ -2473,11 +2827,11 @@ ACTIONS.salvarGrupo = async form => {
   });
 };
 ACTIONS.novoConvite = async () => {
-  if (Firebase.conviteAtual() && !confirm('Gerar um código novo? O código atual deixa de funcionar.')) return;
+  if (Firebase.conviteAtual() && !await confirmar('Gerar um código novo? O código atual deixa de funcionar.')) return;
   try { await Firebase.novoConvite(); renderCasa(); } catch (err) { onApiError(err); }
 };
 ACTIONS.fecharConvite = async () => {
-  if (!confirm('Fechar os convites? Ninguém novo consegue entrar até você gerar outro código.')) return;
+  if (!await confirmar('Fechar os convites? Ninguém novo consegue entrar até você gerar outro código.')) return;
   try { await Firebase.fecharConvite(); renderCasa(); showToast('Convites fechados.'); } catch (err) { onApiError(err); }
 };
 async function renderConvitesEmail() {
@@ -2507,7 +2861,7 @@ ACTIONS.convidarPorEmail = async form => {
   });
 };
 ACTIONS.cancelarConvite = async el => {
-  if (!confirm('Cancelar o convite para ' + el.dataset.email + '?')) return;
+  if (!await confirmar('Cancelar o convite para ' + el.dataset.email + '?')) return;
   try { await Firebase.cancelarConvite(el.dataset.codigo); showToast('Convite cancelado.'); renderConvitesEmail(); }
   catch (err) { onApiError(err); }
 };
@@ -2518,15 +2872,743 @@ ACTIONS.compartilharConvite = async el => {
     if (navigator.share) { await navigator.share({ title: 'Rachaê', text: texto, url: link }); return; }
   } catch (e) { if (e.name === 'AbortError') return; }
   try { await navigator.clipboard.writeText(link); showToast('Link copiado!'); }
-  catch (e) { prompt('Copie o link:', link); }
+  catch (e) { await perguntar('Copie o link:', link); }
 };
 ACTIONS.removerMembro = async el => {
-  if (!confirm('Remover ' + el.dataset.nome + ' da casa? Os lançamentos dela continuam no histórico.')) return;
+  if (!await confirmar('Remover ' + el.dataset.nome + ' da casa? Os lançamentos dela continuam no histórico.')) return;
   try { await api('removerMembro', { uid: el.dataset.uid }); showToast('Pessoa removida.'); } catch (err) { onApiError(err); }
 };
 
-// =================================================================== Meus gastos (todos os grupos)
+// =================================================================== Finanças (pessoais + a sua parte nos grupos)
+// Resumo · Fixos · Cartões · Previsão · Grupos (o "Meus gastos" de antes) e, no ícone de ajustes, renda,
+// benefícios, cartões e limites. Os cálculos ficam em financas.js; valores em centavos.
+const FIN_ABAS = [['resumo', 'Resumo'], ['fixos', 'Fixos'], ['cartoes', 'Cartões'], ['previsao', 'Previsão'], ['grupos', 'Grupos']];
+const FIN_UI = {
+  aba: store.get(K.finAba, 'resumo'), dados: null, mes: null, ocultas: new Set(), fixosOrigem: 'todas', fixosFonte: 'todas',
+  cartOcultos: new Set(), cartTipo: 'todos', prevModo: 'tipo',
+  form: null // ajustes: formulário aberto { tipo: 'renda'|'fonte'|'beneficio'|'limite', id? }
+};
+const brl = c => fmtBRL((Number(c) || 0) / 100);
+const brlCurto = c => { const v = (Number(c) || 0) / 100; return v >= 1000 ? (v / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' mil' : String(Math.round(v)); };
+const pctDe = (v, t) => (t > 0 ? Math.round(v / t * 100) : 0);
+const nomeMesCurto = m => MESES_ABREV[Number(m.slice(5, 7)) - 1].toLowerCase() + '/' + m.slice(2, 4);
+const nomeMesLongo = m => MESES_LONGOS[Number(m.slice(5, 7)) - 1].toLowerCase();
+const corVar = n => `var(${CAT_PALETTE_VARS[((n % 8) + 8) % 8]})`;
+const fontesDe = fin => (fin.fontes || []).slice().sort((a, b) => (a.cor || 0) - (b.cor || 0));
+const fontesAtivas = () => fontesDe(FIN_CACHE || {}).filter(f => !f.arquivada);
+const fontePorId = id => ((FIN_CACHE && FIN_CACHE.fontes) || []).find(f => f.id === id) || null;
+// Cores dos cartões/contas: as 8 do app + 4 extras (todas com versão clara e escura em app.css)
+const CORES_FONTE = [...CAT_PALETTE_VARS, '--fonte-9', '--fonte-10', '--fonte-11', '--fonte-12'];
+const NOMES_COR = ['Azul', 'Laranja', 'Verde', 'Amarelo', 'Rosa', 'Verde-escuro', 'Roxo', 'Vermelho', 'Azul-claro', 'Grafite', 'Marrom', 'Lilás'];
+const corFonte = f => (f ? `var(${CORES_FONTE[((f.cor || 0) % CORES_FONTE.length + CORES_FONTE.length) % CORES_FONTE.length]})` : 'var(--cat-other)');
+/** Primeira cor ainda não usada por outro cartão/conta (sugestão ao cadastrar). */
+function corLivre(fin) {
+  const usadas = new Set((fin.fontes || []).filter(f => !f.arquivada).map(f => f.cor));
+  const livre = CORES_FONTE.findIndex((_, i) => !usadas.has(i));
+  return livre >= 0 ? livre : 0;
+}
+/** Escolha de cor: bolinhas; as já usadas por outro cartão mostram o nome dele ao lado. */
+function coresHtml(fin, escolhida, idAtual) {
+  const donos = {};
+  (fin.fontes || []).filter(f => !f.arquivada && f.id !== idAtual).forEach(f => { (donos[f.cor] = donos[f.cor] || []).push(f.nome); });
+  return `<span class="field-label">Cor (nos gráficos e etiquetas)</span>
+    <div class="cores" role="radiogroup" aria-label="Cor">${CORES_FONTE.map((v, i) => `
+      <button type="button" class="cor-op" role="radio" data-action="finCor" data-k="${i}" aria-checked="${i === escolhida}"
+        aria-label="${NOMES_COR[i]}${donos[i] ? ' (usada por ' + h(donos[i].join(', ')) + ')' : ''}" title="${NOMES_COR[i]}${donos[i] ? ' · ' + h(donos[i].join(', ')) : ''}"
+        style="background:var(${v})">${donos[i] ? '<span class="usada"></span>' : ''}</button>`).join('')}</div>
+    <p class="hint" id="ff-cor-hint">${h(NOMES_COR[escolhida])}${donos[escolhida] ? ' · também usada por ' + h(donos[escolhida].join(', ')) : ''}</p>`;
+}
+ACTIONS.finCor = el => {
+  const i = Number(el.dataset.k);
+  FIN_UI.form.cor = i;
+  document.querySelectorAll('.cores .cor-op').forEach(b => b.setAttribute('aria-checked', String(b === el)));
+  const titulo = el.getAttribute('title').split(' · ');
+  $('ff-cor-hint').textContent = titulo[0] + (titulo[1] ? ' · também usada por ' + titulo[1] : '');
+};
+/**
+ * Lista única de categorias, igual em "Só minha", "De um grupo" e nos limites: as de sempre, as que o grupo
+ * aberto tiver a mais, as que você criou ("+ Nova categoria…") e a do lançamento sendo editado.
+ */
+function categoriasUnificadas(extra) {
+  const minhas = (FIN_CACHE && FIN_CACHE.config && FIN_CACHE.config.categorias) || [];
+  const doGrupo = (STATE.config && STATE.config.categorias) || [];
+  return [...new Set([...CATEGORIAS, ...doGrupo, ...minhas, ...(extra ? [extra] : [])])];
+}
+const opcoesCategoria = (selecionada, extra) =>
+  optionsHtml(categoriasUnificadas(extra), selecionada) + '<option value="__nova__">+ Nova categoria…</option>';
+
+async function renderMeusGastos() {
+  const el = $('tab-gastos');
+  if (!FIN_UI.dados) el.innerHTML = '<div class="spinner">Juntando suas finanças e os seus grupos...</div>';
+  try {
+    FIN_UI.dados = await Firebase.financas();
+    FIN_CACHE = FIN_UI.dados.fin;
+  } catch (err) { el.innerHTML = `<div class="card"><p class="empty">${h(err.message)}</p></div>`; return; }
+  if (STATE.currentTab !== 'gastos') return;
+  desenharFinancas();
+}
+function desenharFinancas() {
+  const el = $('tab-gastos');
+  const { grupos, meUid, fin } = FIN_UI.dados;
+  const mesAtual = mesAtualKey();
+  const itens = montarItens({ grupos, meUid, fin, mesAtual, horizonte: 24 });
+  const ctx = { itens, fin, grupos, mesAtual, P: periodo(), origens: ['eu', ...grupos.map(g => g.id)] };
+  ctx.corOrigem = o => (o === 'eu' ? 'var(--brand-aqua)' : corVar(Math.max(0, grupos.findIndex(g => g.id === o))));
+  ctx.nomeOrigem = o => (o === 'eu' ? 'Só minhas' : (grupos.find(g => g.id === o) || {}).nome || 'Grupo');
+  const aba = FIN_UI.aba;
+  const conteudo = { resumo: finResumo, fixos: finFixos, cartoes: finCartoes, previsao: finPrevisao, config: finConfig }[aba];
+  const aviso = fin.erro ? `<div class="card fin-aviso"><p class="hint warn" style="margin:0">Suas finanças pessoais não carregaram (${h(fin.erro.message)}).
+      Os gastos dos grupos aparecem normalmente.</p></div>` : '';
+  // Renda e cartões é uma tela à parte (abre pelo atalho de Finanças ou pela engrenagem): só o título e o conteúdo
+  if (aba === 'config') {
+    el.innerHTML = `<h2 class="page-title">Renda e cartões</h2>${aviso}<div id="fin-conteudo">${finConfig(ctx)}</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="fin-topo">
+      <h2 class="page-title">Finanças</h2>
+      <button type="button" class="chip" data-action="finAba" data-aba="config">⚙️ Renda e cartões</button>
+    </div>
+    <div class="segmented fin-tabs" role="tablist">${FIN_ABAS.map(([k, n]) =>
+      `<button type="button" role="tab" class="${aba === k ? 'active' : ''}" aria-selected="${aba === k}" data-action="finAba" data-aba="${k}">${n}</button>`).join('')}</div>
+    ${aviso}
+    ${periodoHtml()}
+    <div id="fin-conteudo">${conteudo ? conteudo(ctx) : ''}</div>`;
+  if (aba === 'grupos') {
+    GASTOS.ano = Number(ctx.P.ano);
+    GASTOS.mes = ctx.P.porAno ? 'todos' : ctx.P.mes.slice(5);
+    GASTOS.dados = semPessoais(FIN_UI.dados.gastosGrupos);
+    desenharMeusGastos($('fin-conteudo'));
+  }
+}
+ACTIONS.finAba = el => {
+  const nova = el.dataset.aba;
+  // "Renda e cartões" sobe por cima da aba de Finanças; trocar de aba lá dentro é lateral (sai do caminho)
+  if (nova === 'config' && FIN_UI.aba !== 'config') empilhar();
+  else if (nova !== 'config' && FIN_UI.aba === 'config' && NAV.length && NAV[NAV.length - 1].tab === 'gastos') { NAV.pop(); descartarHistorico(1); }
+  FIN_UI.aba = nova;
+  FIN_UI.form = null;
+  if (FIN_UI.aba !== 'config') store.set(K.finAba, FIN_UI.aba);
+  desenharFinancas();
+  atualizarVoltar();
+  window.scrollTo(0, 0);
+};
+ACTIONS.finOrigem = el => {
+  const o = el.dataset.k;
+  if (FIN_UI.ocultas.has(o)) FIN_UI.ocultas.delete(o); else FIN_UI.ocultas.add(o);
+  desenharFinancas();
+};
+ACTIONS.finFiltro = el => { FIN_UI[el.dataset.campo] = el.dataset.k; desenharFinancas(); };
+ACTIONS.finCartao = el => {
+  const id = el.dataset.k;
+  if (FIN_UI.cartOcultos.has(id)) FIN_UI.cartOcultos.delete(id); else FIN_UI.cartOcultos.add(id);
+  desenharFinancas();
+};
+ACTIONS.finBusca = el => {
+  const q = el.value.trim().toLowerCase();
+  document.querySelectorAll('#fin-rank .rank').forEach(r => r.classList.toggle('hidden', !!q && !r.dataset.busca.includes(q)));
+};
+
+// ---------- pedaços comuns
+const linhaValor = (cor, nome, valor, total, extra = '') => `
+  <div class="grupo-linha"><span class="cor" style="background:${cor}"></span><span class="nome">${nome}</span>${extra}
+    <span class="pct">${pctDe(valor, total)}%</span><span class="val">${brl(valor)}</span></div>`;
+const pillFonte = i => {
+  if (!i.pagouEu) return `<span class="pill">paga ${h(i.pagoPorNome)}</span>`;
+  const f = fontePorId(i.fonteId);
+  return f ? `<span class="pill"><span class="dot" style="background:${corFonte(f)}"></span>${h(f.nome)}</span>` : '';
+};
+const tipoTexto = i => (i.agregado ? `conta fixa · ${i.agregado} ${i.agregado === 1 ? 'mês' : 'meses'}`
+  : i.tipo === 'fixo' ? 'conta fixa' : i.tipo === 'parcela' ? `parcela ${i.num}/${i.n}` : 'à vista');
+/** Ano todo: os meses de uma mesma conta viram uma linha só, com a soma. */
+function juntarPorConta(lista, juntar) {
+  if (!juntar) return lista;
+  const contas = new Map();
+  lista.forEach(i => {
+    const k = [i.ref.kind, i.ref.hid || '', i.ref.colecao || '', i.ref.id].join(':');
+    const c = contas.get(k);
+    if (!c) contas.set(k, { ...i, agregado: 1, data: null });
+    else { c.valor += i.valor; c.cobrado += i.cobrado; c.total += i.total; c.agregado++; c.estimado = c.estimado || i.estimado; }
+  });
+  return [...contas.values()];
+}
+const deOndeTexto = (i, ctx) => (i.origem === 'eu' ? (i.legadoDe ? 'pessoal (lançada em ' + i.legadoDe + ')' : 'pessoal')
+  : ctx.nomeOrigem(i.origem) + (i.conjunto ? ' · ' + i.conjunto : '') + ' · sua parte de ' + brl(i.total));
+function chipsOrigemHtml(ctx) {
+  if (ctx.origens.length < 2) return '';
+  return `<div class="origem-chips" role="group" aria-label="Origem">${ctx.origens.map(o => `
+    <button type="button" class="chip toggle" data-action="finOrigem" data-k="${h(o)}" aria-pressed="${!FIN_UI.ocultas.has(o)}">
+      <span class="cor" style="background:${ctx.corOrigem(o)}"></span>${h(ctx.nomeOrigem(o))}</button>`).join('')}</div>`;
+}
+const visivel = i => !FIN_UI.ocultas.has(i.origem);
+function corCategoria(lista, cat) {
+  const i = lista.findIndex(x => x.chave === cat);
+  return i >= 0 && i < 7 ? corVar(i) : 'var(--cat-other)';
+}
+/** "Pago com": qual cartão/conta foi usado (só para o que você pagou e que fica num grupo ou é antigo). */
+function selectVinculoHtml(i) {
+  const opcoes = fontesAtivas();
+  if (!opcoes.length) return '';
+  return `<label class="fin-vinc">Pago com
+    <select class="chart-select" data-change="finVinculo" data-chave="${h(i.ref.vinculo)}" aria-label="Pago com">
+      <option value="">Pix / dinheiro / não sei</option>
+      ${opcoes.map(f => `<option value="${h(f.id)}" ${f.id === i.fonteId ? 'selected' : ''}>${h(f.nome)}</option>`).join('')}
+    </select></label>`;
+}
+ACTIONS.finVinculo = async el => {
+  try { await Firebase.salvarVinculo(el.dataset.chave, el.value); showToast('Cartão salvo. Só você vê.'); }
+  catch (err) { onApiError(err); }
+};
+/** Botões de cada lançamento, conforme de onde ele vem. */
+function acoesItemHtml(i, ctx) {
+  const r = i.ref;
+  const casa = Firebase.casaAtual();
+  if (r.kind === 'lanc') {
+    const l = ctx.fin.lancamentos.find(x => x.id === r.id);
+    const futuras = l && i.n > 1 ? i.n - i.num : 0;
+    return `<button type="button" class="del-btn" data-action="finEditar" data-tipo="lanc" data-id="${h(r.id)}">Editar</button>
+      ${futuras > 0 ? `<button type="button" class="del-btn" data-action="finAdiantar" data-id="${h(r.id)}" data-max="${futuras}" data-parcela="${i.valor / 100}">Adiantar parcelas</button>` : ''}
+      <button type="button" class="del-btn" data-action="finApagar" data-tipo="lanc" data-id="${h(r.id)}">Apagar</button>`;
+  }
+  if (r.kind === 'fixo' && i.agregado) { // linha do ano todo: o que vale "a partir de um mês" fica na visão por mês
+    return `<button type="button" class="del-btn" data-action="finEditar" data-tipo="fixo" data-id="${h(r.id)}">Editar</button>
+      <button type="button" class="del-btn" data-action="finApagar" data-tipo="fixo" data-id="${h(r.id)}">Apagar</button>`;
+  }
+  if (r.kind === 'fixo') {
+    return `<button type="button" class="del-btn" data-action="finEditar" data-tipo="fixo" data-id="${h(r.id)}">Editar</button>
+      ${i.estimado || i.confirmar ? `<button type="button" class="del-btn" data-action="finConfirmar" data-id="${h(r.id)}" data-mes="${i.mes}" data-valor="${i.valor / 100}">Confirmar valor</button>` : ''}
+      <button type="button" class="del-btn" data-action="finMudarValor" data-id="${h(r.id)}" data-mes="${i.mes}" data-valor="${i.valor / 100}">Mudar valor</button>
+      <button type="button" class="del-btn" data-action="finEncerrar" data-id="${h(r.id)}" data-mes="${i.mes}" data-desc="${h(i.descricao)}">Encerrar a partir daqui</button>
+      <button type="button" class="del-btn" data-action="finApagar" data-tipo="fixo" data-id="${h(r.id)}">Apagar</button>`;
+  }
+  if (r.kind === 'legado') {
+    const aqui = casa && casa.id === r.hid;
+    return `${selectVinculoHtml(i)}${aqui ? `
+      <button type="button" class="del-btn" data-action="editarItem" data-colecao="${r.colecao}" data-id="${h(r.id)}" data-tagkey="" data-voltar="gastos">Editar</button>
+      ${r.colecao === 'pessoaisCompras' && i.n - i.num > 0 ? `<button type="button" class="del-btn" data-action="adiantarPessoal" data-id="${h(r.id)}" data-max="${i.n - i.num}" data-parcela="${i.valor / 100}">Adiantar parcelas</button>` : ''}
+      <button type="button" class="del-btn" data-action="apagarItem" data-colecao="${r.colecao}" data-id="${h(r.id)}" data-voltar="gastos">Apagar</button>`
+      : `<p class="hint">Para editar, abra o grupo ${h(i.legadoDe)}.</p>`}`;
+  }
+  return i.pagouEu ? selectVinculoHtml(i) : '';
+}
+function itemHtml(i, ctx, comAcoes = true) {
+  return `<div class="hist-item">
+    <div class="top"><span>${i.tipo === 'fixo' ? '🔁 ' : ''}${h(i.descricao)}${i.estimado ? ' <span class="pill est">≈ estimado</span>' : ''}</span><span>${brl(i.valor)}</span></div>
+    <div class="sub">${i.data ? h(i.data.slice(8, 10) + '/' + i.data.slice(5, 7)) + ' · ' : ''}${h(deOndeTexto(i, ctx))} · ${h(i.categoria || '—')} · ${h(tipoTexto(i))} ${pillFonte(i)}</div>
+    ${comAcoes ? `<div class="fin-acoes">${acoesItemHtml(i, ctx)}</div>` : ''}
+  </div>`;
+}
+
+// ---------- Resumo
+function finResumo(ctx) {
+  const { itens, fin, mesAtual } = ctx;
+  const P = ctx.P, mes = P.mes, nMeses = P.meses.length;
+  const itensMes = itens.filter(i => P.noPeriodo(i) && visivel(i));
+  const total = soma(itensMes);
+  const futuro = P.porAno ? P.ano > mesAtual.slice(0, 4) : mes > mesAtual;
+  const porTipo = t => soma(itensMes.filter(i => i.tipo === t));
+  const beneficios = fontesDe(fin).filter(f => f.tipo === 'beneficio' && !f.arquivada);
+  const ehBeneficio = i => { const f = fontePorId(i.fonteId); return i.pagouEu && f && f.tipo === 'beneficio'; };
+  const renda = P.meses.reduce((t, m) => t + rendaDoMes(fin.rendas, m), 0);
+  const dinheiro = soma(itensMes.filter(i => !ehBeneficio(i)));
+  const sobra = renda - dinheiro;
+  const cats = somarPor(itensMes, i => i.categoria || 'Outros');
+  const vazio = !(fin.fontes || []).length && !(fin.rendas || []).length && !(fin.fixos || []).length && !(fin.lancamentos || []).length;
+  const avs = P.porAno ? [] : avisos({ itensMes, todos: itens.filter(visivel), mes, mesAtual, fin }); // avisos são de um mês
+  const limites = (fin.config && fin.config.limites) || {};
+  const deOnde = somarPor(itensMes.filter(i => i.pagouEu && i.fonteId && fontePorId(i.fonteId)), i => i.fonteId);
+  const outros = soma(itensMes.filter(i => !i.pagouEu));
+  const semFonte = soma(itensMes.filter(i => i.pagouEu && !(i.fonteId && fontePorId(i.fonteId))));
+  const lista = itensMes.slice().sort((a, b) => String(b.data || b.mes).localeCompare(String(a.data || a.mes)));
+  return `
+    ${vazio ? `<div class="card fin-comece">
+      <h3>Comece por aqui</h3>
+      <p class="hint" style="margin-top:0">A sua parte nos grupos já aparece abaixo. Cadastre seus cartões (com fechamento e vencimento), sua renda e
+        seus benefícios para ver a fatura certa de cada compra e quanto sobra no mês.</p>
+      <button class="primary" type="button" data-action="finAba" data-aba="config">Cadastrar renda e cartões</button>
+      <button class="secondary" type="button" data-action="finNova" data-tipo="avista">Lançar uma despesa pessoal</button>
+    </div>` : ''}
+    ${chipsOrigemHtml(ctx)}
+    <div class="card hero">
+      <div class="label">${futuro ? 'Previsto para' : 'Seus gastos em'} ${h(P.curto)}${FIN_UI.ocultas.size ? ' · filtrado' : ''}</div>
+      <div class="value">${brl(total)}</div>
+      ${renda > 0 ? `
+        <div class="status ${sobra >= 0 ? 'status-good' : 'status-critical'}">${sobra >= 0 ? 'Sobra do salário' + (P.porAno ? ' no ano ' : ' ') + brl(sobra) : 'Faltam ' + brl(-sobra)}</div>
+        <div class="renda-bar"><span style="width:${Math.min(100, pctDe(dinheiro, renda))}%;background:${sobra >= 0 ? 'var(--brand-blue)' : 'var(--critical)'}"></span></div>
+        <div class="renda-leg"><span>${pctDe(dinheiro, renda)}% da renda (${brl(renda)})</span><span>${beneficios.length ? 'benefícios à parte' : ''}</span></div>`
+      : `<div class="status status-neutral"><button type="button" class="link-btn" data-action="finAba" data-aba="config" style="padding:0">Cadastre sua renda</button>&nbsp;para ver quanto sobra</div>`}
+      <div class="stat-row tres">
+        <div class="stat-tile"><div class="l">Fixas</div><div class="v">${brl(porTipo('fixo'))}</div></div>
+        <div class="stat-tile"><div class="l">Parcelas</div><div class="v">${brl(porTipo('parcela'))}</div></div>
+        <div class="stat-tile"><div class="l">À vista</div><div class="v">${brl(porTipo('avista'))}</div></div>
+      </div>
+    </div>
+    ${avs.length ? `<div class="card"><h3>Atenção</h3>${avs.map(a => avisoHtml(a, mes)).join('')}</div>` : ''}
+    ${beneficios.length ? `<div class="card"><h3>Benefícios</h3>${beneficios.map(f => {
+      const usado = soma(itens.filter(i => P.noPeriodo(i) && i.pagouEu && i.fonteId === f.id)), disponivel = f.mensal * nMeses;
+      const p = pctDe(usado, disponivel);
+      return `<div class="benef"><div class="top"><span>${h(f.nome)} <small>${brl(disponivel)}${P.porAno ? ' no ano' : '/mês'}</small></span>
+        <span>${usado > disponivel ? 'passou ' + brl(usado - disponivel) : 'sobra ' + brl(disponivel - usado)}</span></div>
+        <div class="trilho"><span style="width:${Math.min(100, p)}%;background:${p > 80 ? 'var(--critical)' : corFonte(f)}"></span></div></div>`;
+    }).join('')}</div>` : ''}
+    ${Object.keys(limites).length ? `<div class="card"><h3>Limites${P.porAno ? ' no ano (12 × o limite do mês)' : ''}</h3><div class="limite">${Object.keys(limites).sort().map(cat => {
+      const v = soma(itensMes.filter(i => i.categoria === cat)), lim = limites[cat] * nMeses, estoura = v > lim;
+      return `<div class="bar-row"><span class="name">${h(cat)}</span><span class="track"><span class="fill" style="display:block;width:${Math.min(100, pctDe(v, lim))}%;background:${estoura ? 'var(--critical)' : 'var(--good)'}"></span></span><span class="val">${pctDe(v, lim)}%</span></div>
+        <div class="sub ${estoura ? 'estoura' : ''}">${brl(v)} de ${brl(lim)}${estoura ? ' · passou ' + brl(v - lim) : ''}</div>`;
+    }).join('')}</div></div>` : ''}
+    <div class="card">
+      <h3>Por categoria</h3>
+      ${cats.length ? cats.slice(0, 7).map(c => {
+        const m = P.porAno ? 0 : mediaCategoria(itens.filter(visivel), mes, c.chave), d = m > 0 ? Math.round((c.valor / m - 1) * 100) : 0;
+        return `<div class="bar-row"><span class="name">${h(c.chave)}</span><span class="track"><span class="fill" style="display:block;width:${pctDe(c.valor, cats[0].valor)}%;background:${corCategoria(cats, c.chave)}"></span></span><span class="val">${brl(c.valor)}</span></div>
+          ${Math.abs(d) >= 15 && m > 3000 ? `<div class="hint fin-delta">${d > 0 ? '▲' : '▼'} ${Math.abs(d)}% × média de 3 meses</div>` : ''}`;
+      }).join('') + (cats.length > 7 ? `<p class="hint">+ ${cats.length - 7} categorias · ${brl(soma(cats.slice(7), 'valor'))}</p>` : '')
+      : `<p class="empty">Nenhum gasto ${P.porAno ? 'neste ano' : 'neste mês'}.</p>`}
+    </div>
+    ${total > 0 ? `<div class="card">
+      <h3>De onde saiu (sua parte)</h3>
+      ${deOnde.map(x => { const f = fontePorId(x.chave); return linhaValor(corFonte(f), h(f.nome), x.valor, total); }).join('')}
+      ${semFonte ? linhaValor('var(--gridline)', 'Sem cartão informado', semFonte, total) : ''}
+      ${outros ? linhaValor('var(--cat-other)', 'Pago por outras pessoas', outros, total) : ''}
+      ${outros ? '<p class="hint">"Pago por outras pessoas" é a sua parte em contas que alguém do grupo pagou. Você acerta pelo grupo.</p>' : ''}
+    </div>` : ''}
+    ${P.porAno ? anoPorMesHtml(itens.filter(visivel), P, mesAtual) : `<div class="card">
+      <div class="chart-head"><h3>Lançamentos de ${h(P.curto)}</h3>
+        <button class="link-btn" type="button" data-action="finNova" data-tipo="avista">+ Despesa pessoal</button></div>
+      ${lista.length ? lista.map(i => itemHtml(i, ctx)).join('') : '<p class="empty">Nada neste mês.</p>'}
+    </div>`}`;
+}
+/** Ano todo: total de cada mês (toque num mês para abrir só ele). */
+function anoPorMesHtml(itens, P, mesAtual) {
+  const tipos = [['fixo', 'Fixas', 'var(--cat-1)'], ['parcela', 'Parcelas', 'var(--cat-2)'], ['avista', 'À vista', 'var(--cat-4)']];
+  const dados = P.meses.map(m => { const doMes = itens.filter(i => i.mes === m), o = { m, t: soma(doMes) }; tipos.forEach(([k]) => { o[k] = soma(doMes.filter(i => i.tipo === k)); }); return o; });
+  const max = Math.max(1, ...dados.map(d => d.t));
+  return `<div class="card">
+    <h3>Por mês em ${P.ano}</h3>
+    <div class="colunas">${dados.map(d => `
+      <button type="button" class="coluna ${d.m > mesAtual ? 'futuro' : ''}" data-action="periodoIr" data-mes="${d.m}" aria-label="${h(labelMes(d.m))}: ${h(brl(d.t))}">
+        ${d.t ? `<span class="tot" style="bottom:${d.t / max * 100}%">${brlCurto(d.t)}</span>` : ''}
+        ${tipos.slice().reverse().map(([k, , c]) => (d[k] ? `<span class="seg" style="height:${d[k] / max * 100}%;background:${c}"></span>` : '')).join('')}
+      </button>`).join('')}</div>
+    <div class="col-labels">${MESES_ABREV.map(x => `<span>${x.slice(0, 1)}</span>`).join('')}</div>
+    <div class="legenda">${tipos.map(([, n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join('')}</div>
+    <p class="hint">Meses futuros mais claros (o que já está previsto). Toque num mês para ver os lançamentos dele.</p>
+  </div>`;
+}
+function avisoHtml(a, mes) {
+  const linha = (ic, cls, html, acoes = '') => `<div class="insight"><span class="ic ${cls}">${ic}</span><div>${html}${acoes ? `<div class="acoes">${acoes}</div>` : ''}</div></div>`;
+  const mesNome = nomeMesLongo(mes);
+  if (a.tipo === 'confirmar') return linha('✍️', 'acao', `Confirme o valor de <b>${h(a.item.descricao)}</b> em ${h(mesNome)}. A estimativa é <b>${brl(a.item.valor)}</b>, pela média dos últimos meses.`,
+    `<button class="link-btn" type="button" data-action="finConfirmar" data-id="${h(a.item.ref.id)}" data-mes="${a.item.mes}" data-valor="${a.item.valor / 100}">Confirmar valor</button>`);
+  if (a.tipo === 'limite') return linha('🚧', 'alerta', `<b>${h(a.categoria)}</b> passou do limite: ${brl(a.valor)} de ${brl(a.limite)} (+${brl(a.valor - a.limite)}).`);
+  if (a.tipo === 'adiantado') return linha('🤝', 'info', `Você pagou <b>${brl(a.valor)}</b> a mais por outras pessoas (${h(a.itens.join(', '))}). Esse valor volta pelos acertos dos grupos e não conta nos seus gastos.`);
+  if (a.tipo === 'beneficio') return linha('🍽️', 'alerta', `<b>${h(a.fonte.nome)}</b>: já usou ${pctDe(a.usado, a.fonte.mensal)}% no dia ${a.dia}. ${a.usado < a.fonte.mensal ? 'Sobram ' + brl(a.fonte.mensal - a.usado) + ' até o fim do mês.' : ''}`);
+  if (a.tipo === 'duplicado') return linha('🔁', 'info', `<b>${h(a.fixo.descricao)}</b> (${brl(a.grupo.valor)}) está nos seus fixos e também no grupo <b>${h(a.grupo.origemNome)}</b>. É a mesma conta?`,
+    `<button class="link-btn" type="button" data-action="finDuplicado" data-id="${h(a.fixo.id)}" data-resp="mesmo">Contar só a do grupo</button>
+     <button class="link-btn" type="button" data-action="finDuplicado" data-id="${h(a.fixo.id)}" data-resp="diferente">São diferentes</button>`);
+  if (a.tipo === 'acabam') return linha('🎉', 'bom', `Última parcela este mês: ${a.itens.map(x => '<b>' + h(x) + '</b>').join(', ')}. Em ${h(nomeMesLongo(addM(mes, 1)))} seu mês fica <b>${brl(a.valor)}</b> mais leve.`);
+  if (a.tipo === 'acima') return linha('📈', 'alerta', `<b>${h(a.categoria)}</b> está ${Math.round((a.valor / a.media - 1) * 100)}% acima da sua média (${brl(a.valor)} × ${brl(a.media)}).`);
+  return '';
+}
+
+// ---------- Fixos
+function finFixos(ctx) {
+  const { itens, P } = ctx;
+  const tipoFonte = i => { if (!i.pagouEu) return 'outro'; const f = fontePorId(i.fonteId); return f ? f.tipo : 'sem'; };
+  const org = FIN_UI.fixosOrigem, sel = FIN_UI.fixosFonte;
+  const todos = itens.filter(i => P.noPeriodo(i) && i.tipo === 'fixo' && (org === 'todas' || (org === 'eu' ? i.origem === 'eu' : i.origem !== 'eu')));
+  // Ano todo: cada conta numa linha só, com a soma dos meses
+  const lista = juntarPorConta(sel === 'todas' ? todos : todos.filter(i => tipoFonte(i) === sel), P.porAno);
+  const total = soma(lista);
+  const cats = somarPor(lista, i => i.categoria || 'Outros');
+  let acc = 0;
+  const conic = cats.map(c => { const a = acc; acc += c.valor / total * 360; return `${corCategoria(cats, c.chave)} ${a}deg ${acc}deg`; }).join(',');
+  const tf = soma(todos);
+  const porFonte = [['debito', 'Débito / conta', 'var(--cat-3)'], ['credito', 'Crédito', 'var(--cat-1)'], ['beneficio', 'Benefício', 'var(--cat-5)'],
+    ['outro', 'Pago por outras pessoas', 'var(--cat-other)'], ['sem', 'Sem cartão informado', 'var(--gridline)']]
+    .map(([k, n, c]) => ({ k, n, c, v: soma(todos.filter(i => tipoFonte(i) === k)) })).filter(x => x.v > 0);
+  const seg = (campo, atual, opcoes) => `<div class="mini-seg" role="group">${opcoes.map(([k, n]) =>
+    `<button type="button" data-action="finFiltro" data-campo="${campo}" data-k="${k}" aria-pressed="${atual === k}">${n}</button>`).join('')}</div>`;
+  return `
+    ${seg('fixosOrigem', org, [['todas', 'Todas'], ['eu', 'Só minhas'], ['grupos', 'De grupos']])}
+    ${seg('fixosFonte', sel, [['todas', 'Toda fonte'], ['debito', 'Débito'], ['credito', 'Crédito'], ['beneficio', 'Benefício'], ['outro', 'Outra pessoa']])}
+    <div class="card hero">
+      <div class="label">${P.porAno ? 'Total fixo no ano' : 'Total mensal fixo'} (sua parte) · ${h(P.curto)}</div>
+      <div class="value">${brl(total)}</div>
+      <div class="status status-neutral">${lista.length} ${lista.length === 1 ? 'conta' : 'contas'} · ${lista.filter(i => i.origem !== 'eu').length} de grupos</div>
+    </div>
+    ${cats.length ? `<div class="card">
+      <h3>Mapa de custos</h3>
+      <div class="donut-wrap">
+        <div class="donut" style="background:conic-gradient(${conic})"><div class="c">${cats.length} ${cats.length === 1 ? 'categoria' : 'categorias'}<b>${pctDe(cats[0].valor, total)}%</b>${h(cats[0].chave)}</div></div>
+        <div class="donut-leg">${cats.slice(0, 7).map(c => `<div class="grupo-linha"><span class="cor" style="background:${corCategoria(cats, c.chave)}"></span><span class="nome">${h(c.chave)}</span><span class="pct">${pctDe(c.valor, total)}%</span></div>`).join('')}
+          ${cats.length > 7 ? `<div class="grupo-linha"><span class="cor" style="background:var(--cat-other)"></span><span class="nome">Outras ${cats.length - 7}</span><span class="pct">${pctDe(soma(cats.slice(7), 'valor'), total)}%</span></div>` : ''}</div>
+      </div>
+    </div>` : ''}
+    ${sel === 'todas' && porFonte.length ? `<div class="card">
+      <h3>Fonte de pagamento</h3>
+      <div class="prop-bar">${porFonte.map(x => `<span style="width:${pctDe(x.v, tf)}%;background:${x.c}"></span>`).join('')}</div>
+      ${porFonte.map(x => linhaValor(x.c, x.n, x.v, tf)).join('')}
+    </div>` : ''}
+    <div class="card">
+      <div class="chart-head"><h3>Contas por categoria</h3><button class="link-btn" type="button" data-action="finNova" data-tipo="fixo">+ Nova conta fixa</button></div>
+      ${cats.length ? cats.map((c, k) => `<details class="cat-bloco" ${k < 3 ? 'open' : ''}><summary>${linhaValor(corCategoria(cats, c.chave), h(c.chave), c.valor, total)}</summary>
+        ${lista.filter(i => (i.categoria || 'Outros') === c.chave).sort((a, b) => b.valor - a.valor).map(i => itemHtml(i, ctx)).join('')}
+      </details>`).join('') : '<p class="empty">Nenhuma conta fixa aqui.</p>'}
+    </div>`;
+}
+
+// ---------- Cartões
+function finCartoes(ctx) {
+  const { itens, fin, P } = ctx;
+  const doMesCartao = itens.filter(i => P.noPeriodo(i) && i.pagouEu && i.cobrado > 0 && (fontePorId(i.fonteId) || {}).tipo === 'credito');
+  const cartoes = fontesDe(fin).filter(f => f.tipo === 'credito' && (!f.arquivada || doMesCartao.some(i => i.fonteId === f.id)));
+  if (!cartoes.length) {
+    return `<div class="card"><h3>Cartões</h3><p class="hint" style="margin-top:0">Cadastre seus cartões de crédito com o dia de fechamento e de vencimento.
+      Assim cada compra cai sozinha na fatura certa.</p>
+      <button class="primary" type="button" data-action="finAba" data-aba="config">Cadastrar cartão</button></div>`;
+  }
+  const base = doMesCartao.filter(i => !FIN_UI.cartOcultos.has(i.fonteId));
+  const filtros = { todos: () => true, parcela: i => i.tipo === 'parcela', avista: i => i.tipo === 'avista', fixo: i => i.tipo === 'fixo', grupo: i => i.origem !== 'eu' };
+  const lista = base.filter(filtros[FIN_UI.cartTipo] || filtros.todos);
+  const total = soma(base, 'cobrado');
+  const deOutros = total - soma(base);
+  const porCartao = somarPor(base, i => i.fonteId, 'cobrado');
+  const agrupado = new Map();
+  lista.forEach(i => {
+    const k = i.descricao + '|' + i.fonteId;
+    if (!agrupado.has(k)) agrupado.set(k, { descricao: i.descricao, fonteId: i.fonteId, cobrado: 0, meu: 0, itens: [] });
+    const g = agrupado.get(k); g.cobrado += i.cobrado; g.meu += i.valor; g.itens.push(i);
+  });
+  const rank = [...agrupado.values()].sort((a, b) => b.cobrado - a.cobrado);
+  const max = rank.length ? rank[0].cobrado : 1;
+  const sub = g => {
+    const i = g.itens[0], f = fontePorId(g.fonteId);
+    const mesmaConta = new Set(g.itens.map(x => x.chave.split(/[#@]/)[0])).size === 1;
+    const t = g.itens.length === 1 ? tipoTexto(i)
+      : mesmaConta ? g.itens.length + (i.tipo === 'parcela' ? ' parcelas' : ' meses') : g.itens.length + ' compras';
+    return `${f.nome} · ${t}${i.origem !== 'eu' ? ' · ' + ctx.nomeOrigem(i.origem) + ', sua parte ' + brl(g.meu) : ' · ' + (i.categoria || '—')}`;
+  };
+  return `
+    <div class="fonte-chips" role="group" aria-label="Cartões" style="margin-bottom:14px">${cartoes.map(f => `
+      <button type="button" class="chip toggle" data-action="finCartao" data-k="${h(f.id)}" aria-pressed="${!FIN_UI.cartOcultos.has(f.id)}">
+        <span class="cor" style="background:${corFonte(f)}"></span>${h(f.nome)}</button>`).join('')}</div>
+    <div class="card hero">
+      <div class="label">Faturas de ${h(P.curto)} (valor cobrado)</div>
+      <div class="value">${brl(total)}</div>
+      <div class="status status-neutral">${deOutros > 0 ? brl(deOutros) + ' são de outras pessoas' : base.length + (base.length === 1 ? ' lançamento' : ' lançamentos')}</div>
+    </div>
+    <div class="card">
+      <h3>Gastos por cartão</h3>
+      ${porCartao.length ? `<div class="prop-bar">${porCartao.map(c => `<span style="width:${pctDe(c.valor, total)}%;background:${corFonte(fontePorId(c.chave))}"></span>`).join('')}</div>
+      ${porCartao.map(c => { const f = fontePorId(c.chave); return linhaValor(corFonte(f), h(f.nome) + ` <span class="pill">vence dia ${f.vence}</span>`, c.valor, total); }).join('')}`
+      : '<p class="empty">Nenhuma compra nos cartões escolhidos.</p>'}
+    </div>
+    <div class="card">
+      <h3>Itens</h3>
+      <input class="busca" type="search" placeholder="Buscar item (ex.: Uber)" aria-label="Buscar item" data-input="finBusca">
+      <div class="mini-seg" role="group" aria-label="Tipo">${[['todos', 'Todos'], ['parcela', 'Parcelas'], ['avista', 'À vista'], ['fixo', 'Fixas'], ['grupo', 'De grupos']].map(([k, n]) =>
+        `<button type="button" data-action="finFiltro" data-campo="cartTipo" data-k="${k}" aria-pressed="${FIN_UI.cartTipo === k}">${n}</button>`).join('')}</div>
+      <div id="fin-rank">${rank.length ? rank.map(g => `
+        <div class="rank" data-busca="${h(g.descricao.toLowerCase())}"><span class="heat" style="width:${Math.max(4, g.cobrado / max * 100)}%"></span>
+          <span class="cor-q" style="background:${corFonte(fontePorId(g.fonteId))}"></span>
+          <span class="n">${h(g.descricao)}<small>${h(sub(g))}</small></span><span class="v">${brl(g.cobrado)}</span></div>`).join('')
+        : '<p class="empty">Nada neste filtro.</p>'}</div>
+    </div>`;
+}
+
+// ---------- Previsão
+function finPrevisao(ctx) {
+  const { itens, mesAtual, P } = ctx;
+  // Mês: 9 meses em volta do escolhido; Ano todo: os 12 meses do ano
+  const meses = P.porAno ? P.meses : [-3, -2, -1, 0, 1, 2, 3, 4, 5].map(k => addM(P.mes, k));
+  const vis = itens.filter(visivel);
+  const est = mediaAvista(vis, mesAtual);
+  const porTipo = FIN_UI.prevModo === 'tipo';
+  const series = porTipo ? [['fixo', 'Fixas', 'var(--cat-1)'], ['parcela', 'Parcelas', 'var(--cat-2)'], ['avista', 'À vista', 'var(--cat-4)']]
+    : ctx.origens.filter(o => !FIN_UI.ocultas.has(o)).map(o => [o, ctx.nomeOrigem(o), ctx.corOrigem(o)]);
+  const campo = porTipo ? 'tipo' : 'origem';
+  const dados = meses.map(m => {
+    const doMes = vis.filter(i => i.mes === m);
+    const o = { m, est: m > mesAtual ? est : 0 };
+    series.forEach(([k]) => { o[k] = soma(doMes.filter(i => i[campo] === k)); });
+    o.t = series.reduce((t, [k]) => t + o[k], 0) + o.est;
+    return o;
+  });
+  const max = Math.max(1, ...dados.map(d => d.t));
+  const sel = P.porAno
+    ? dados.reduce((a, d) => { Object.keys(d).forEach(k => { if (k !== 'm') a[k] = (a[k] || 0) + d[k]; }); return a; }, { m: P.ano })
+    : dados.find(d => d.m === P.mes);
+  const renda = P.meses.reduce((t, m) => t + rendaDoMes(ctx.fin.rendas, m), 0);
+  // Parcelas em andamento: uma linha por compra, com o mês da última parcela
+  const series2 = new Map();
+  vis.filter(i => i.tipo === 'parcela').forEach(i => {
+    const k = i.chave.split('#')[0];
+    const fim = addM(i.mes, i.n - i.num);
+    if (fim < mesAtual) return;
+    const atual = series2.get(k);
+    const perto = !atual || Math.abs(monthsDiff(i.mes, mesAtual)) < Math.abs(monthsDiff(atual.mes, mesAtual));
+    if (perto) series2.set(k, { ...i, fim });
+  });
+  const andamento = [...series2.values()].sort((a, b) => a.fim.localeCompare(b.fim) || b.valor - a.valor);
+  const libera = {};
+  andamento.forEach(i => { const m = addM(i.fim, 1); libera[m] = (libera[m] || 0) + i.valor; });
+  return `
+    ${chipsOrigemHtml(ctx)}
+    <div class="card">
+      <div class="chart-head"><h3>Mês a mês</h3><div class="mini-seg" style="margin:0">${[['tipo', 'Por tipo'], ['origem', 'Por origem']].map(([k, n]) =>
+        `<button type="button" data-action="finFiltro" data-campo="prevModo" data-k="${k}" aria-pressed="${FIN_UI.prevModo === k}">${n}</button>`).join('')}</div></div>
+      <div class="colunas">${dados.map(d => `
+        <button type="button" class="coluna ${d.m > mesAtual ? 'futuro' : ''} ${d.m === sel.m ? 'sel' : ''}" data-action="periodoIr" data-mes="${d.m}" aria-label="${h(labelMes(d.m))}: ${h(brl(d.t))}">
+          <span class="tot" style="bottom:${d.t / max * 100}%">${brlCurto(d.t)}</span>
+          ${d.est ? `<span class="seg est" style="height:${d.est / max * 100}%"></span>` : ''}
+          ${series.slice().reverse().map(([k, , c]) => (d[k] ? `<span class="seg" style="height:${d[k] / max * 100}%;background:${c}"></span>` : '')).join('')}
+        </button>`).join('')}</div>
+      <div class="col-labels">${dados.map(d => `<span class="${d.m === sel.m ? 'sel' : ''}">${MESES_ABREV[Number(d.m.slice(5)) - 1]}</span>`).join('')}</div>
+      <div class="legenda">${series.map(([, n, c]) => `<span><i style="background:${c}"></i>${h(n)}</span>`).join('')}<span><i class="est"></i>À vista estimado</span></div>
+      <p class="hint">Sempre a sua parte. Meses futuros mais claros; o à vista futuro é a média dos últimos 3 meses (${brl(est)}). Toque num mês.</p>
+    </div>
+    <div class="card">
+      <h3>${h(P.rotulo)}${(P.porAno ? P.ano > mesAtual.slice(0, 4) : P.mes > mesAtual) ? ' · previsão' : ''}</h3>
+      ${series.map(([k, n, c]) => (sel[k] ? linhaValor(c, h(n), sel[k], sel.t) : '')).join('')}
+      ${sel.est ? linhaValor('var(--cat-other)', 'À vista (estimado)', sel.est, sel.t) : ''}
+      <div class="grupo-linha fin-total"><span class="nome">Total</span><span class="val">${brl(sel.t)}</span></div>
+      ${renda > 0 ? `<div class="grupo-linha"><span class="nome" style="color:${renda - sel.t >= 0 ? 'var(--good-text)' : 'var(--critical)'}">${renda - sel.t >= 0 ? 'Sobra prevista' : 'Faltam'}</span>
+        <span class="val" style="color:${renda - sel.t >= 0 ? 'var(--good-text)' : 'var(--critical)'}">${brl(Math.abs(renda - sel.t))}</span></div>` : ''}
+    </div>
+    ${Object.keys(libera).length ? `<div class="card">
+      <h3>Quando as parcelas acabam</h3>
+      ${Object.keys(libera).sort().map(m => `<div class="grupo-linha"><span class="cor" style="background:var(--good)"></span>
+        <span class="nome">A partir de ${h(nomeMesLongo(m))}${m.slice(0, 4) !== mesAtual.slice(0, 4) ? '/' + m.slice(2, 4) : ''}</span>
+        <span class="val" style="color:var(--good-text)">−${brl(libera[m])}/mês</span></div>`).join('')}
+    </div>` : ''}
+    <div class="card">
+      <h3>Parcelas em andamento · ${andamento.length}</h3>
+      ${andamento.length ? andamento.map(i => {
+        const numAtual = i.num + monthsDiff(mesAtual, i.mes);
+        const falta = Math.max(0, i.n - Math.max(numAtual, 0)) * i.valor;
+        return `<div class="parc"><div class="top"><span>${h(i.descricao)}${i.origem !== 'eu' ? ` <span class="pill" style="background:${ctx.corOrigem(i.origem)};color:#fff">${h(ctx.nomeOrigem(i.origem))}</span>` : ''}</span><span>${brl(i.valor)}/mês</span></div>
+          <div class="sub"><span>${pillFonte(i)} ${numAtual >= 1 ? Math.min(numAtual, i.n) + '/' + i.n : 'começa ' + nomeMesCurto(addM(i.mes, 1 - i.num))} · até ${nomeMesCurto(i.fim)}</span>
+            <span class="nowrap">${numAtual === i.n ? '<b style="color:var(--good-text)">última parcela</b>' : 'falta ' + brl(falta)}</span></div>
+          ${i.origem !== 'eu' ? `<div class="sub"><span>sua parte de ${brl(i.total)}/mês</span></div>` : ''}
+          <div class="dots">${Array.from({ length: i.n }, (_, k) => `<i class="${k + 1 < numAtual ? 'pago' : k + 1 === numAtual ? 'atual' : ''}"></i>`).join('')}</div></div>`;
+      }).join('') : '<p class="empty">Nenhuma parcela em aberto.</p>'}
+    </div>`;
+}
+const monthsDiff = (a, b) => { const [ya, ma] = a.split('-').map(Number), [yb, mb] = b.split('-').map(Number); return (ya - yb) * 12 + (ma - mb); };
+
+// ---------- Renda, benefícios, cartões e limites
+function finConfig(ctx) {
+  const { fin, itens, mesAtual } = ctx;
+  const f = FIN_UI.form;
+  const fontes = fontesDe(fin).filter(x => !x.arquivada);
+  const doMes = itens.filter(i => i.mes === mesAtual);
+  const rendas = (fin.rendas || []).slice().sort((a, b) => (a.tipo === 'extra') - (b.tipo === 'extra') || b.valor - a.valor);
+  const limites = (fin.config && fin.config.limites) || {};
+  const legadosSem = doMes.filter(i => i.ref.kind === 'legado' && !i.fonteId).length;
+  const form = tipo => (f && f.tipo === tipo ? finFormHtml(f, fin) : '');
+  const novo = (tipo, rotulo) => (f && f.tipo === tipo ? '' : `<button class="secondary" type="button" data-action="finForm" data-tipo="${tipo}">${rotulo}</button>`);
+  const nomesBenef = { VR: 'Vale-refeição', VA: 'Vale-alimentação', VT: 'Vale-transporte' };
+  return `
+    <div class="card">
+      <h3>Renda</h3>
+      ${rendas.map(r => `<div class="renda-linha"><span class="ic" style="background:${r.tipo === 'extra' ? 'var(--cat-other)' : 'var(--good)'}">${r.tipo === 'extra' ? '+' : 'R$'}</span>
+        <span class="n">${h(r.descricao)}<small>${r.tipo === 'extra' ? 'só em ' + h(labelMes(r.mes).toLowerCase()) : 'todo mês · dia ' + (r.dia || 1)}</small></span>
+        <span class="v">${brl(r.valor)}</span>
+        <span class="fin-mini"><button type="button" class="del-btn" data-action="finForm" data-tipo="renda" data-id="${h(r.id)}">Editar</button>
+          <button type="button" class="del-btn" data-action="finApagar" data-tipo="renda" data-id="${h(r.id)}">Apagar</button></span></div>`).join('')
+        || '<p class="hint" style="margin-top:0">Cadastre seu salário para ver quanto sobra no mês.</p>'}
+      ${form('renda')}${novo('renda', '+ Renda (salário, freela, 13º…)')}
+    </div>
+    <div class="card">
+      <h3>Benefícios</h3>
+      ${fontes.filter(x => x.tipo === 'beneficio').map(x => `<div class="renda-linha"><span class="ic" style="background:${corFonte(x)}">${h(x.nome.slice(0, 3))}</span>
+        <span class="n">${h(nomesBenef[x.nome.toUpperCase()] || x.nome)}<small>cai dia ${x.dia || 1} · usado ${brl(soma(doMes.filter(i => i.pagouEu && i.fonteId === x.id)))} em ${h(nomeMesLongo(mesAtual))}</small></span>
+        <span class="v">${brl(x.mensal)}</span>
+        <span class="fin-mini"><button type="button" class="del-btn" data-action="finForm" data-tipo="beneficio" data-id="${h(x.id)}">Editar</button>
+          <button type="button" class="del-btn" data-action="finArquivar" data-id="${h(x.id)}" data-nome="${h(x.nome)}">Remover</button></span></div>`).join('')
+        || '<p class="hint" style="margin-top:0">VR, VA, VT… Eles aparecem em "Pago com", e o que você paga com eles sai do saldo do benefício, não do salário.</p>'}
+      ${form('beneficio')}${novo('beneficio', '+ Benefício')}
+    </div>
+    <div class="card">
+      <h3>Cartões e contas</h3>
+      ${fontes.filter(x => x.tipo !== 'beneficio').map(x => {
+        const fatura = soma(doMes.filter(i => i.pagouEu && i.fonteId === x.id), 'cobrado');
+        return `<div class="fonte-row"><span class="cartao" style="background:${corFonte(x)}"></span>
+          <div class="info"><b>${h(x.nome)}</b><span>${x.tipo === 'credito' ? `Crédito · fecha dia ${x.fecha} · vence dia ${x.vence}` : 'Débito / conta / Pix'}</span>
+            <span class="fin-mini"><button type="button" class="del-btn" data-action="finForm" data-tipo="fonte" data-id="${h(x.id)}">Editar</button>
+              <button type="button" class="del-btn" data-action="finArquivar" data-id="${h(x.id)}" data-nome="${h(x.nome)}">Remover</button></span></div>
+          <div class="val">${x.tipo === 'credito' ? 'fatura de ' + h(MESES_ABREV[Number(mesAtual.slice(5)) - 1].toLowerCase()) : 'em ' + h(nomeMesLongo(mesAtual))}<b>${brl(fatura)}</b></div></div>`;
+      }).join('') || '<p class="hint" style="margin-top:0">Com os dias de fechamento e vencimento, cada compra cai sozinha na fatura certa.</p>'}
+      ${form('fonte')}${novo('fonte', '+ Cartão ou conta')}
+    </div>
+    <div class="card">
+      <h3>Limites por categoria</h3>
+      ${Object.keys(limites).sort().map(cat => `<div class="list-row"><span>${h(cat)}</span>
+        <span><b>${brl(limites[cat])}</b>/mês <button type="button" class="del-btn" data-action="finApagar" data-tipo="limite" data-id="${h(cat)}">Remover</button></span></div>`).join('')
+        || '<p class="hint" style="margin-top:0">Ex.: Alimentação até R$ 1.200 por mês. O Resumo avisa quando passar.</p>'}
+      ${form('limite')}${novo('limite', '+ Limite')}
+    </div>
+    ${legadosSem ? `<div class="card">
+      <h3>Despesas pessoais antigas</h3>
+      <p class="hint" style="margin-top:0">As despesas que você lançou como "Pessoal" dentro dos grupos já aparecem em Finanças, do jeito que estão.
+        Se quiser, escolha o cartão de cada uma no Resumo, em "Lançamentos" (${legadosSem} sem cartão em ${h(nomeMesLongo(mesAtual))}).</p>
+    </div>` : ''}`;
+}
+function finFormHtml(f, fin) {
+  const fonte = f.id ? (fin.fontes || []).find(x => x.id === f.id) : null;
+  const renda = f.tipo === 'renda' && f.id ? (fin.rendas || []).find(x => x.id === f.id) : null;
+  const dinheiro = c => (c ? (c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
+  const botoes = `<div class="btn-row"><button class="secondary" type="button" data-action="finForm" data-tipo="">Cancelar</button>
+    <button class="primary" type="submit">Salvar</button></div>`;
+  if (f.tipo === 'renda') {
+    const extra = f.extra != null ? f.extra : !!(renda && renda.tipo === 'extra');
+    const meses = [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(k => addM(mesAtualKey(), k));
+    return `<form class="fin-form" data-submit="finSalvarRenda" novalidate>
+      <div class="segmented" style="margin-bottom:8px">
+        <button type="button" class="${extra ? '' : 'active'}" data-action="finRendaTipo" data-extra="0">Todo mês</button>
+        <button type="button" class="${extra ? 'active' : ''}" data-action="finRendaTipo" data-extra="1">Só um mês</button></div>
+      <label for="fr-desc">Nome</label><input type="text" id="fr-desc" maxlength="40" placeholder="Ex.: Salário, Freela, 13º" value="${h(renda ? renda.descricao : '')}">
+      <label for="fr-valor">Valor${extra ? '' : ' por mês (líquido)'}</label>${moneyInput('fr-valor', `value="${dinheiro(renda && renda.valor)}"`)}
+      ${extra ? `<label for="fr-mes">Mês</label><select id="fr-mes">${meses.map(m => `<option value="${m}" ${(renda ? renda.mes : mesAtualKey()) === m ? 'selected' : ''}>${h(labelMes(m))}</option>`).join('')}</select>`
+        : `<label for="fr-dia">Dia em que cai</label><input type="text" id="fr-dia" inputmode="numeric" maxlength="2" value="${renda ? renda.dia || 1 : 5}">`}
+      ${botoes}</form>`;
+  }
+  if ((f.tipo === 'beneficio' || f.tipo === 'fonte') && f.cor == null) f.cor = fonte && Number.isInteger(fonte.cor) ? fonte.cor : corLivre(fin);
+  const nomeAtual = f.nome != null ? f.nome : fonte ? fonte.nome : '';
+  if (f.tipo === 'beneficio') {
+    return `<form class="fin-form" data-submit="finSalvarFonte" data-tipo="beneficio" novalidate>
+      <label for="ff-nome">Nome</label><input type="text" id="ff-nome" maxlength="30" placeholder="Ex.: VR, VA, VT" value="${h(fonte ? fonte.nome : '')}">
+      <div class="chips">${['VR', 'VA', 'VT'].map(n => `<button type="button" class="chip" data-action="finNomeRapido" data-nome="${n}">${n}</button>`).join('')}</div>
+      <label for="ff-mensal">Valor por mês</label>${moneyInput('ff-mensal', `value="${dinheiro(fonte && fonte.mensal)}"`)}
+      <label for="ff-dia">Dia em que cai</label><input type="text" id="ff-dia" inputmode="numeric" maxlength="2" value="${fonte ? fonte.dia || 1 : 1}">
+      ${coresHtml(fin, f.cor, f.id)}
+      ${botoes}</form>`;
+  }
+  if (f.tipo === 'fonte') {
+    const tipo = f.tipoFonte || (fonte ? fonte.tipo : 'credito');
+    return `<form class="fin-form" data-submit="finSalvarFonte" data-tipo="${tipo}" novalidate>
+      <div class="segmented" style="margin-bottom:8px">
+        <button type="button" class="${tipo === 'credito' ? 'active' : ''}" data-action="finFonteTipo" data-k="credito">Cartão de crédito</button>
+        <button type="button" class="${tipo === 'debito' ? 'active' : ''}" data-action="finFonteTipo" data-k="debito">Débito / conta</button></div>
+      <label for="ff-nome">Nome</label><input type="text" id="ff-nome" maxlength="30" placeholder="${tipo === 'credito' ? 'Ex.: Nubank, Inter' : 'Ex.: Conta Inter'}" value="${h(nomeAtual)}">
+      ${tipo === 'credito' ? `<div class="divisao-grid">
+        <div><label for="ff-fecha">Fecha dia</label><input type="text" id="ff-fecha" inputmode="numeric" maxlength="2" value="${fonte && fonte.fecha ? fonte.fecha : ''}"></div>
+        <div><label for="ff-vence">Vence dia</label><input type="text" id="ff-vence" inputmode="numeric" maxlength="2" value="${fonte && fonte.vence ? fonte.vence : ''}"></div></div>
+        <p class="hint">Compra no dia do fechamento ou depois entra na fatura seguinte.</p>` : ''}
+      ${coresHtml(fin, f.cor, f.id)}
+      ${botoes}</form>`;
+  }
+  if (f.tipo === 'limite') {
+    const usadas = Object.keys((fin.config && fin.config.limites) || {});
+    const cats = categoriasUnificadas().filter(c => !usadas.includes(c));
+    return `<form class="fin-form" data-submit="finSalvarLimite" novalidate>
+      <label for="fl-cat">Categoria</label><select id="fl-cat">${optionsHtml(cats, cats[0])}</select>
+      <label for="fl-valor">Limite por mês</label>${moneyInput('fl-valor')}
+      ${botoes}</form>`;
+  }
+  return '';
+}
+ACTIONS.finForm = el => {
+  FIN_UI.form = el.dataset.tipo ? { tipo: el.dataset.tipo, id: el.dataset.id || null } : null;
+  desenharFinancas();
+  const campo = document.querySelector('.fin-form input');
+  if (campo) campo.focus();
+};
+ACTIONS.finRendaTipo = el => { FIN_UI.form.extra = el.dataset.extra === '1'; desenharFinancas(); };
+ACTIONS.finFonteTipo = el => { FIN_UI.form.nome = $('ff-nome').value; FIN_UI.form.tipoFonte = el.dataset.k; desenharFinancas(); };
+ACTIONS.finNomeRapido = el => { $('ff-nome').value = el.dataset.nome; };
+async function salvarFin(form, fn, msg) {
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try { await fn(); FIN_UI.form = null; showToast(msg); vibrate(20); desenharFinancas(); } catch (err) { onApiError(err); }
+  });
+}
+ACTIONS.finSalvarRenda = form => {
+  const extra = !!FIN_UI.form.extra || (FIN_UI.form.extra == null && !!$('fr-mes'));
+  return salvarFin(form, () => Firebase.salvarRenda({ id: FIN_UI.form.id, descricao: $('fr-desc').value, valor: parseMoney($('fr-valor').value),
+    tipo: extra ? 'extra' : 'mensal', dia: $('fr-dia') ? $('fr-dia').value : 1, mes: $('fr-mes') ? $('fr-mes').value : null }), 'Renda salva.');
+};
+ACTIONS.finSalvarFonte = form => salvarFin(form, () => Firebase.salvarFonte({ id: FIN_UI.form.id, tipo: form.dataset.tipo, nome: $('ff-nome').value,
+  fecha: $('ff-fecha') && $('ff-fecha').value, vence: $('ff-vence') && $('ff-vence').value,
+  mensal: $('ff-mensal') && parseMoney($('ff-mensal').value), dia: $('ff-dia') && $('ff-dia').value, cor: FIN_UI.form.cor }), 'Salvo.');
+ACTIONS.finSalvarLimite = form => {
+  const valor = parseMoney($('fl-valor').value);
+  if (!(valor > 0)) { showToast('Informe um valor maior que zero.', true); return; }
+  return salvarFin(form, () => Firebase.salvarLimite($('fl-cat').value, valor), 'Limite salvo.');
+};
+ACTIONS.finArquivar = async el => {
+  if (!await confirmar('Remover "' + el.dataset.nome + '" da lista? Os lançamentos antigos continuam mostrando esse nome.')) return;
+  try { await Firebase.arquivarFonte(el.dataset.id); showToast('Removido.'); } catch (err) { onApiError(err); }
+};
+ACTIONS.finApagar = async el => {
+  const { tipo, id } = el.dataset;
+  const msg = { lanc: 'Apagar esta despesa pessoal?', fixo: 'Apagar esta conta fixa e todos os meses dela?\nPara só parar de repetir daqui em diante, use "Encerrar a partir daqui".',
+    renda: 'Apagar esta renda?', limite: 'Remover o limite de "' + id + '"?' }[tipo];
+  if (!await confirmar(msg)) return;
+  try {
+    if (tipo === 'lanc') await Firebase.apagarLancamento(id);
+    if (tipo === 'fixo') await Firebase.apagarFixo(id);
+    if (tipo === 'renda') await Firebase.apagarRenda(id);
+    if (tipo === 'limite') await Firebase.salvarLimite(id, 0);
+    showToast('Apagado.');
+  } catch (err) { onApiError(err); }
+};
+ACTIONS.finDuplicado = async el => {
+  try { await Firebase.marcarDuplicado(el.dataset.id, el.dataset.resp); showToast(el.dataset.resp === 'mesmo' ? 'Pronto: conta só a do grupo.' : 'Ok, não aviso mais.'); }
+  catch (err) { onApiError(err); }
+};
+const perguntarValor = async (texto, atual) => {
+  const resp = await perguntar(texto, Number(atual).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  if (resp === null) return null;
+  const v = parseMoney(resp);
+  if (!(v > 0)) { showToast('Informe um valor maior que zero.', true); return null; }
+  return v;
+};
+ACTIONS.finConfirmar = async el => {
+  const v = await perguntarValor('Quanto veio de verdade em ' + mesBR(el.dataset.mes) + '?', el.dataset.valor);
+  if (v === null) return;
+  try { await Firebase.confirmarFixo(el.dataset.id, el.dataset.mes, v); showToast('Valor confirmado.'); } catch (err) { onApiError(err); }
+};
+ACTIONS.finMudarValor = async el => {
+  const v = await perguntarValor('Novo valor a partir de ' + mesBR(el.dataset.mes) + ' (os meses anteriores continuam como estão):', el.dataset.valor);
+  if (v === null) return;
+  try { await Firebase.mudarValorFixoPessoal(el.dataset.id, el.dataset.mes, v); showToast('Valor atualizado a partir de ' + mesBR(el.dataset.mes) + '.'); }
+  catch (err) { onApiError(err); }
+};
+ACTIONS.finEncerrar = async el => {
+  if (!await confirmar('Parar de contar "' + el.dataset.desc + '" a partir de ' + mesBR(el.dataset.mes) + '? Os meses anteriores continuam.')) return;
+  try { await Firebase.encerrarFixoPessoal(el.dataset.id, el.dataset.mes); showToast('Conta fixa encerrada.'); } catch (err) { onApiError(err); }
+};
+ACTIONS.finAdiantar = async el => {
+  const max = Number(el.dataset.max);
+  const resp = await perguntar('Quantas parcelas adiantar para este mês? (1 a ' + max + ', de ' + fmtBRL(el.dataset.parcela) + ' cada)\n' +
+    'Como no cartão, as últimas parcelas passam a contar agora.', '1');
+  if (resp === null) return;
+  const qtd = parseInt(resp, 10);
+  if (!(qtd >= 1 && qtd <= max)) { showToast('Digite um número de 1 a ' + max + '.', true); return; }
+  try { await Firebase.adiantarLancamento(el.dataset.id, qtd); showToast(qtd + (qtd > 1 ? ' parcelas adiantadas.' : ' parcela adiantada.')); }
+  catch (err) { onApiError(err); }
+};
+/** Abre o formulário "Nova" já em "Só minha". */
+ACTIONS.finNova = el => {
+  DESP_DONO = 'eu';
+  FIN_FORM.tipo = el.dataset.tipo || 'avista';
+  subirPara('despesa');
+};
+ACTIONS.finEditar = el => {
+  const lista = el.dataset.tipo === 'fixo' ? FIN_CACHE.fixos : FIN_CACHE.lancamentos;
+  const dados = lista.find(x => x.id === el.dataset.id);
+  if (!dados) { showToast('Lançamento não encontrado.', true); return; }
+  sairDaEdicao();
+  EDITANDO_FIN = { tipo: el.dataset.tipo, id: el.dataset.id, dados };
+  subirPara('despesa', { editando: true });
+};
+
+// ---------- Grupos (o "Meus gastos" de antes): a sua parte em cada grupo
 const GASTOS = { ano: null, mes: 'todos', dados: null, detalhe: null, ocultos: null };
+// Despesas pessoais antigas aparecem nas outras abas de Finanças, não aqui
+const semPessoais = d => ({ ...d, itens: d.itens.filter(i => !String(i.tipo).startsWith('Pessoal')) });
+
 // Tom mais escuro/claro da cor do grupo para cada conjunto (k de n)
 function tomDaCor(hex, k, n) {
   if (n < 2 || !/^#[0-9a-f]{6}$/i.test(hex)) return hex;
@@ -2547,16 +3629,7 @@ function seriesGastos(grupos, itens, corDe, comNomeDoGrupo) {
   });
   return out;
 }
-async function renderMeusGastos() {
-  const el = $('tab-gastos');
-  if (!GASTOS.dados) el.innerHTML = '<div class="spinner">Juntando os gastos de todos os seus grupos...</div>';
-  try { GASTOS.dados = await Firebase.meusGastos(); }
-  catch (err) { el.innerHTML = `<div class="card"><p class="empty">${h(err.message)}</p></div>`; return; }
-  if (STATE.currentTab !== 'gastos') return;
-  desenharMeusGastos();
-}
-function desenharMeusGastos() {
-  const el = $('tab-gastos');
+function desenharMeusGastos(el = $('fin-conteudo')) {
   const { grupos, itens } = GASTOS.dados;
   if (!GASTOS.detalhe) GASTOS.detalhe = new Set(store.get(K.gastosDetalhe, []));
   if (!GASTOS.ocultos) GASTOS.ocultos = new Set(store.get(K.gastosOcultos, []));
@@ -2567,11 +3640,7 @@ function desenharMeusGastos() {
   const conjuntosDe = id => new Set(itens.filter(i => i.grupoId === id).map(i => i.conjunto));
   const detalhaveis = visiveis.filter(g => conjuntosDe(g.id).size > 1);
 
-  // Anos com gastos (sempre inclui o atual)
-  const anos = new Set([anoAtual()]);
-  itens.forEach(i => i.meses.forEach(m => anos.add(Number(m.mes.slice(0, 4)))));
-  const listaAnos = [...anos].sort((a, b) => b - a);
-  if (!GASTOS.ano || !anos.has(GASTOS.ano)) GASTOS.ano = anoAtual();
+  if (!GASTOS.ano) GASTOS.ano = anoAtual();
   const prefixo = GASTOS.mes === 'todos' ? GASTOS.ano + '-' : GASTOS.ano + '-' + GASTOS.mes;
 
   // Quanto de cada gasto cai no período escolhido (parcelas pessoais podem cair em vários meses)
@@ -2605,17 +3674,7 @@ function desenharMeusGastos() {
   let mostrados = 0;
 
   el.innerHTML = `
-    <h2 class="page-title">Meus gastos</h2>
-    <p class="page-sub">A sua parte em cada despesa, somando todos os grupos e as despesas pessoais. Acertos de contas não entram.</p>
-    <div class="filtros dois">
-      <select data-change="filtroGastos" data-campo="ano" aria-label="Ano">
-        ${listaAnos.map(a => `<option value="${a}" ${a === GASTOS.ano ? 'selected' : ''}>${a}</option>`).join('')}
-      </select>
-      <select data-change="filtroGastos" data-campo="mes" aria-label="Mês">
-        <option value="todos">Ano todo</option>
-        ${MESES_ABREV.map((m, i) => { const v = String(i + 1).padStart(2, '0'); return `<option value="${v}" ${v === GASTOS.mes ? 'selected' : ''}>${m}</option>`; }).join('')}
-      </select>
-    </div>
+    <p class="page-sub">A sua parte em cada despesa dos grupos. Acertos de contas não entram.</p>
     <div class="detalhe-gastos">
       <span class="field-label">Grupos</span>
       <div class="chips" role="group" aria-label="Grupos mostrados">
@@ -2698,8 +3757,7 @@ function desenharGraficoMeusGastos(itens, grupos, corDe) {
       },
       onClick: (ev, els) => {
         if (!els.length) return;
-        GASTOS.mes = String(els[0].index + 1).padStart(2, '0');
-        desenharMeusGastos();
+        irParaMes(ano + '-' + String(els[0].index + 1).padStart(2, '0'));
       },
       scales: {
         x: { stacked: true, grid: { display: false }, ticks: { color: cssVar('--text-muted'), autoSkip: false, maxRotation: 0, font: { size: 10 } } },
@@ -2720,12 +3778,6 @@ ACTIONS.mostrarGrupoGastos = el => {
   store.set(K.gastosOcultos, [...GASTOS.ocultos]);
   desenharMeusGastos();
 };
-ACTIONS.filtroGastos = el => {
-  const campo = el.dataset.campo;
-  GASTOS[campo] = campo === 'ano' ? Number(el.value) : el.value;
-  desenharMeusGastos();
-};
-
 // =================================================================== Instalação / PWA
 let DEFERRED_INSTALL = null;
 function isStandalone() {
@@ -2736,6 +3788,42 @@ function isIOS() {
   return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS se apresenta como Mac
 }
+// Deslizar da borda esquerda para voltar. O iPhone não tem esse gesto em app instalado na tela inicial
+// (no Safari ele já existe e chega como "voltar" do navegador); no Android o voltar do sistema já funciona.
+function ligarGestoVoltar() {
+  if (!isIOS() || !isStandalone()) return;
+  const seta = document.createElement('div');
+  seta.className = 'gesto-voltar';
+  seta.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>';
+  document.body.appendChild(seta);
+  const LIMITE = 80;
+  let x0 = null, y0 = 0, dx = 0;
+  document.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    x0 = e.touches.length === 1 && t.clientX <= 24 && NAV.length ? t.clientX : null;
+    y0 = t.clientY; dx = 0;
+  }, { passive: true });
+  document.addEventListener('touchmove', e => {
+    if (x0 === null) return;
+    const t = e.touches[0];
+    dx = t.clientX - x0;
+    if (Math.abs(t.clientY - y0) > Math.max(30, dx)) { x0 = null; seta.style.opacity = 0; return; } // rolagem vertical
+    const p = Math.max(0, Math.min(1, dx / LIMITE));
+    seta.style.opacity = p;
+    seta.style.top = t.clientY + 'px';
+    seta.style.transform = `translate(${p * 28 - 40}px, -50%)`;
+    seta.classList.toggle('pronto', p >= 1);
+  }, { passive: true });
+  const fim = () => {
+    if (x0 !== null && dx >= LIMITE) voltarTela();
+    x0 = null;
+    seta.style.opacity = 0;
+    seta.classList.remove('pronto');
+  };
+  document.addEventListener('touchend', fim, { passive: true });
+  document.addEventListener('touchcancel', () => { x0 = null; seta.style.opacity = 0; }, { passive: true });
+}
+ligarGestoVoltar();
 function setupInstallPrompt() {
   window.addEventListener('beforeinstallprompt', e => {
     e.preventDefault(); // Android/Chrome: guardamos para mostrar nosso próprio botão

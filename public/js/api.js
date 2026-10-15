@@ -3,7 +3,9 @@
 // Vocabulário: na tela, "grupo" = quem divide as contas (coleção `households`)
 // e "conjunto de despesas" = subdivisão dentro dele (coleção `grupos`). Os
 // nomes das coleções ficaram os da primeira versão para não migrar dados.
-// Despesas pessoais (privadas) ficam em households/{hid}/pessoais/{uid}/despesas e .../compras.
+// Despesas pessoais antigas ficam em households/{hid}/pessoais/{uid}/despesas e .../compras (só leitura
+// pela aba Finanças; não se criam mais). As finanças pessoais ficam em users/{uid}/fontes, fixos,
+// lancamentos, rendas, vinculos e no doc users/{uid}/financas/config — só a própria pessoa lê e grava.
 //
 // Mantém a mesma interface que o app usava com o Apps Script — api('dashboard'),
 // api('addDespesa', {payload}) etc. —, então as telas quase não mudaram. Os
@@ -19,11 +21,12 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  doc, getDoc, getDocs, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, writeBatch, serverTimestamp, query, where
+  doc, getDoc, getDocs, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, writeBatch, serverTimestamp, query, where, deleteField
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from '../firebase-config.js';
 import { normalizarChave } from './pix.js';
 import { montarDashboard, montarHistorico, membrosDoGrupo, montarDashboardPessoal, montarHistoricoPessoal, minhasDespesas, ehMensal } from './calc.js';
+import { CATEGORIAS } from './financas.js';
 
 /** Valor especial do seletor de conjunto para o conjunto pessoal (privado). */
 export const PESSOAL = '__pessoal__';
@@ -32,8 +35,8 @@ export class ApiError extends Error {
   constructor(message, code) { super(message); this.code = code; }
 }
 
-const CATEGORIAS_PADRAO = ['Aluguel', 'Mercado/Supermercado', 'Lazer', 'Transporte', 'Streaming',
-  'Contas de Consumo', 'Saúde', 'Pet', 'Viagem', 'Alimentação', 'Outros'];
+// Grupos novos já nascem com a lista única de categorias (a mesma de Finanças)
+const CATEGORIAS_PADRAO = CATEGORIAS;
 const SEGMENTOS_PADRAO = ['Mensais', 'À Vista'];
 const METODOS = ['Igual', 'Porcentagem', 'Valor customizado'];
 
@@ -235,6 +238,7 @@ export const esqueciSenha = email => tenta(async () => {
 });
 export async function sair() {
   pararEscuta();
+  pararFinancas();
   CASA = null; DB = null;
   GOOGLE_PENDENTE = null; SINCRONIZADO = '';
   TODOS_CACHE = { em: 0, grupos: null };
@@ -456,8 +460,33 @@ async function apagarEmLotes(refs) {
     await b.commit();
   }
 }
-/** Apaga as despesas pessoais da pessoa num grupo (só ela tem acesso a elas). */
+/**
+ * Guarda em Finanças (users/{uid}/lancamentos) uma cópia das despesas pessoais da pessoa num grupo,
+ * antes de qualquer coisa que as apague. Id fixo por despesa: copiar de novo não duplica, e a aba
+ * Finanças deixa de contar a original assim que a cópia existe.
+ */
+async function copiarPessoaisParaFinancas(hid) {
+  const uid = usuarioAtual().uid;
+  for (const [sub, colecao] of [['despesas', 'pessoais'], ['compras', 'pessoaisCompras']]) {
+    const snap = await getDocs(collection(fs, 'households', hid, 'pessoais', uid, sub));
+    for (const d of snap.docs) {
+      const destino = doc(fs, 'users', uid, 'lancamentos', 'legado_' + hid + '_' + colecao + '_' + d.id);
+      if ((await getDoc(destino)).exists()) continue;
+      const x = d.data();
+      const vinculo = await getDoc(doc(fs, 'users', uid, 'vinculos', hid + '_' + colecao + '_' + d.id)).catch(() => null);
+      await setDoc(destino, {
+        data: x.data, descricao: x.descricao, categoria: x.categoria, valor: x.valor,
+        nParcelas: sub === 'compras' ? Math.max(1, x.nParcelas || 1) : 1, parcelaSeguinte: !!x.parcelaSeguinte,
+        ...(Array.isArray(x.adiantamentos) && x.adiantamentos.length ? { adiantamentos: x.adiantamentos } : {}),
+        fonteId: (vinculo && vinculo.exists() && vinculo.data().fonteId) || '',
+        legado: { hid, colecao, id: d.id }, criadoEm: serverTimestamp()
+      });
+    }
+  }
+}
+/** Apaga as despesas pessoais da pessoa num grupo (só ela tem acesso a elas) — depois de copiá-las para Finanças. */
 async function apagarMeusPessoais(hid) {
+  await copiarPessoaisParaFinancas(hid); // se a cópia falhar, nada é apagado
   const uid = usuarioAtual().uid;
   const refs = [];
   for (const sub of ['despesas', 'compras']) {
@@ -466,6 +495,7 @@ async function apagarMeusPessoais(hid) {
   }
   await apagarEmLotes(refs);
 }
+const ERRO_COPIA = 'Não foi possível guardar suas despesas pessoais deste grupo em Finanças, então nada foi apagado. Tente de novo.';
 /** Grupo que sumiu (excluído, ou a pessoa foi removida): apaga os pessoais dela ali e tira da lista. */
 async function esquecerGrupo(hid) {
   const u = usuarioAtual();
@@ -481,6 +511,7 @@ export const sairDaCasa = () => tenta(async () => {
   const u = usuarioAtual();
   if (souDono()) throw new ApiError('Quem administra o grupo não pode sair dele. Você pode excluir o grupo.');
   const hid = CASA.id;
+  await copiarPessoaisParaFinancas(hid).catch(() => { throw new ApiError(ERRO_COPIA); });
   pararEscuta();
   await apagarMeusPessoais(hid);
   await deleteDoc(doc(fs, 'households', hid, 'membros', u.uid));
@@ -502,6 +533,7 @@ export const excluirGrupoInteiro = () => tenta(async () => {
   const hid = CASA.id;
   const u = usuarioAtual().uid;
   const copia = DB;
+  await copiarPessoaisParaFinancas(hid).catch(() => { throw new ApiError(ERRO_COPIA); });
   pararEscuta();
   await updateDoc(doc(fs, 'households', hid), { excluindo: true });
   const ref = (col, id) => doc(fs, 'households', hid, col, id);
@@ -691,7 +723,7 @@ const ACOES = {
       metodo: payload.metodo, participantes: payload.participantes.map(uidPorNome), divisao: divisaoParaUids(payload),
       parcelaSeguinte: !!payload.parcelaSeguinte, criadoPor: usuarioAtual().uid, criadoEm: serverTimestamp()
     });
-    return { ok: true, id: 'CP-' + ref.id.slice(0, 5).toUpperCase() };
+    return { ok: true, id: 'CP-' + ref.id.slice(0, 5).toUpperCase(), docId: ref.id };
   },
   async addPagamento({ payload }) {
     const u = usuarioAtual().uid;
@@ -929,12 +961,13 @@ const ACOES = {
 };
 
 /**
- * "Meus gastos": lê todos os grupos da pessoa (inclusive as despesas pessoais dela em cada
+ * Aba Finanças (e a antiga "Meus gastos", hoje "Grupos" dentro dela): lê todos os grupos da pessoa (inclusive as despesas pessoais dela em cada
  * um). O grupo aberto usa os dados em tempo real; os outros são lidos uma vez e guardados
  * por 1 minuto.
  */
 let TODOS_CACHE = { em: 0, grupos: null };
-export const meusGastos = (forcar = false) => tenta(async () => {
+/** Todos os grupos da pessoa com os dados (o aberto, ao vivo; os outros, lidos no máximo a cada minuto). */
+async function todosOsGrupos(forcar) {
   const u = usuarioAtual();
   if (forcar || !TODOS_CACHE.grupos || Date.now() - TODOS_CACHE.em > 60000) {
     const { casas } = await lerPerfil(u.uid);
@@ -959,13 +992,153 @@ export const meusGastos = (forcar = false) => tenta(async () => {
     TODOS_CACHE = { em: Date.now(), grupos };
   }
   // O grupo aberto sempre com os dados ao vivo
-  const grupos = TODOS_CACHE.grupos.map(g => (CASA && g.id === CASA.id && DB) ? { id: g.id, nome: CASA.nome, db: DB } : g)
+  return TODOS_CACHE.grupos.map(g => (CASA && g.id === CASA.id && DB) ? { id: g.id, nome: CASA.nome, db: DB } : g)
     .filter(g => g.db);
-  return {
-    grupos: grupos.map(g => ({ id: g.id, nome: g.nome })),
-    itens: minhasDespesas(grupos, u.uid)
-  };
+}
+
+// ------------------------------------------------------------------ finanças pessoais (aba Finanças)
+// Tudo em users/{uid}/...: só a própria pessoa lê e grava (firestore.rules). Escuta em tempo real
+// desde a primeira vez que alguma tela precisa, até sair da conta.
+const FIN_VAZIO = () => ({ fontes: [], fixos: [], lancamentos: [], rendas: [], vinculos: {}, config: {}, erro: null });
+let FIN = FIN_VAZIO(), FIN_UID = null, FIN_PRONTO = null, finUnsubs = [];
+function pararFinancas() { finUnsubs.forEach(f => f()); finUnsubs = []; FIN = FIN_VAZIO(); FIN_UID = null; FIN_PRONTO = null; }
+const finCol = nome => collection(fs, 'users', usuarioAtual().uid, nome);
+const finDoc = (nome, id) => doc(fs, 'users', usuarioAtual().uid, nome, id);
+function escutarFinancas() {
+  const uid = usuarioAtual().uid;
+  if (FIN_UID === uid && FIN_PRONTO) return FIN_PRONTO;
+  pararFinancas();
+  FIN_UID = uid;
+  const avisar = () => window.dispatchEvent(new CustomEvent('rachae:dados', { detail: { colecao: 'financas' } }));
+  const fontes = [
+    ...['fontes', 'fixos', 'lancamentos', 'rendas', 'vinculos'].map(nome => [nome, collection(fs, 'users', uid, nome)]),
+    ['config', doc(fs, 'users', uid, 'financas', 'config')]
+  ];
+  FIN_PRONTO = Promise.all(fontes.map(([nome, ref]) => new Promise(resolve => {
+    let primeira = true;
+    finUnsubs.push(onSnapshot(ref, snap => {
+      if (nome === 'config') FIN.config = snap.exists() ? snap.data() : {};
+      else if (nome === 'vinculos') FIN.vinculos = Object.fromEntries(snap.docs.map(d => [d.id, d.data().fonteId || '']));
+      else FIN[nome] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (primeira) { primeira = false; resolve(); } else avisar();
+    }, err => {
+      // Ex.: regras novas ainda não publicadas. A aba mostra o aviso; o resto do app segue normal.
+      FIN.erro = traduz(err);
+      if (primeira) { primeira = false; resolve(); } else avisar();
+    }));
+  })));
+  return FIN_PRONTO;
+}
+/** Tudo o que a aba Finanças precisa: grupos com os dados, o "Meus gastos" de hoje e as finanças pessoais. */
+export const financas = (forcar = false) => tenta(async () => {
+  const [grupos] = await Promise.all([todosOsGrupos(forcar), escutarFinancas()]);
+  const meUid = usuarioAtual().uid;
+  return { grupos, meUid, fin: FIN, gastosGrupos: { grupos: grupos.map(g => ({ id: g.id, nome: g.nome })), itens: minhasDespesas(grupos, meUid) } };
 });
+/** Finanças pessoais já carregadas (formulário "Nova"). */
+export const dadosFinancas = () => tenta(async () => { await escutarFinancas(); return FIN; });
+
+const textoOk = (v, max, msg) => {
+  const t = String(v || '').trim().replace(/\s+/g, ' ').slice(0, max);
+  if (!t) throw new ApiError(msg);
+  return t;
+};
+const diaOk = v => { const n = parseInt(v, 10); return n >= 1 && n <= 31 ? n : null; };
+const mesOk = v => (/^\d{4}-\d{2}$/.test(v || '') ? v : null);
+const parcelasOk = v => Math.max(1, Math.min(60, parseInt(v, 10) || 1));
+async function gravar(colecao, id, campos) {
+  if (id) { await updateDoc(finDoc(colecao, id), { ...campos, editadoEm: serverTimestamp() }); return id; }
+  return (await addDoc(finCol(colecao), { ...campos, criadoEm: serverTimestamp() })).id;
+}
+/** Cartão, conta ou benefício. Remover só arquiva: os lançamentos antigos continuam mostrando o nome. */
+export const N_CORES_FONTE = 12;
+export const salvarFonte = ({ id, nome, tipo, fecha, vence, mensal, dia, cor }) => tenta(async () => {
+  if (!['credito', 'debito', 'beneficio'].includes(tipo)) throw new ApiError('Escolha o tipo.');
+  const campos = { nome: textoOk(nome, 30, 'Dê um nome (ex.: Nubank, VR).'), tipo };
+  if (tipo === 'credito') {
+    campos.fecha = diaOk(fecha); campos.vence = diaOk(vence);
+    if (!campos.fecha || !campos.vence) throw new ApiError('Informe os dias de fechamento e de vencimento (1 a 31).');
+  }
+  if (tipo === 'beneficio') { campos.mensal = centavos(mensal); campos.dia = diaOk(dia) || 1; }
+  const corOk = Number.isInteger(cor) && cor >= 0 && cor < N_CORES_FONTE;
+  if (corOk) campos.cor = cor; // escolhida pela pessoa
+  if (!id) {
+    if (!corOk) {
+      const usadas = new Set(FIN.fontes.filter(f => !f.arquivada).map(f => f.cor));
+      campos.cor = [...Array(N_CORES_FONTE).keys()].find(c => !usadas.has(c)) ?? FIN.fontes.length % N_CORES_FONTE;
+    }
+    campos.arquivada = false;
+  }
+  return { id: await gravar('fontes', id, campos) };
+});
+export const arquivarFonte = id => tenta(() => updateDoc(finDoc('fontes', id), { arquivada: true, editadoEm: serverTimestamp() }));
+/** Despesa pessoal: à vista (1 parcela) ou parcelada. */
+export const salvarLancamento = ({ id, data, descricao, categoria, valor, nParcelas, parcelaSeguinte, fonteId }) => tenta(async () => {
+  const campos = { data: dataOk(data), descricao: textoOk(descricao, 80, 'Preencha a descrição.'),
+    categoria: textoOk(categoria, 40, 'Escolha a categoria.'), valor: centavos(valor), nParcelas: parcelasOk(nParcelas),
+    parcelaSeguinte: !!parcelaSeguinte, fonteId: String(fonteId || '').slice(0, 40) };
+  return { id: await gravar('lancamentos', id, campos) };
+});
+export const apagarLancamento = id => tenta(() => deleteDoc(finDoc('lancamentos', id)));
+/** Adianta as últimas parcelas para o mês atual (como no cartão). */
+export const adiantarLancamento = (id, qtd) => tenta(async () => {
+  const l = FIN.lancamentos.find(x => x.id === id);
+  if (!l) throw new ApiError('Lançamento não encontrado.');
+  const n = parseInt(qtd, 10);
+  if (!(n >= 1 && n <= 60)) throw new ApiError('Informe quantas parcelas adiantar.');
+  const lista = [...(l.adiantamentos || []), { mes: mesHoje(), qtd: n }].slice(-60);
+  await updateDoc(finDoc('lancamentos', id), { adiantamentos: lista, editadoEm: serverTimestamp() });
+});
+/** Conta fixa pessoal: repete todo mês a partir de `desde`. */
+export const salvarFixo = ({ id, descricao, categoria, valor, desde, fonteId, estimado }) => tenta(async () => {
+  const campos = { descricao: textoOk(descricao, 80, 'Preencha a descrição.'), categoria: textoOk(categoria, 40, 'Escolha a categoria.'),
+    valor: centavos(valor), desde: mesOk(desde) || mesHoje(), fonteId: String(fonteId || '').slice(0, 40), estimado: !!estimado };
+  return { id: await gravar('fixos', id, campos) };
+});
+const fixoPorId = id => { const f = FIN.fixos.find(x => x.id === id); if (!f) throw new ApiError('Conta fixa não encontrada.'); return f; };
+export const mudarValorFixoPessoal = (id, mes, valor) => tenta(async () => {
+  const f = fixoPorId(id);
+  if (!mesOk(mes)) throw new ApiError('Mês inválido.');
+  const valores = [...(f.valores || []).filter(x => x.desde !== mes), { desde: mes, valor: centavos(valor) }]
+    .sort((a, b) => a.desde.localeCompare(b.desde)).slice(-120);
+  await updateDoc(finDoc('fixos', id), { valores, editadoEm: serverTimestamp() });
+});
+/** Para de repetir a partir de `mes` (os meses anteriores ficam). */
+export const encerrarFixoPessoal = (id, mes) => tenta(async () => {
+  const f = fixoPorId(id);
+  if (!mesOk(mes) || mes <= f.desde) throw new ApiError('Mês inválido.');
+  const [a, m] = mes.split('-').map(Number);
+  const antes = new Date(a, m - 2, 1);
+  await updateDoc(finDoc('fixos', id), { ate: antes.getFullYear() + '-' + String(antes.getMonth() + 1).padStart(2, '0'), editadoEm: serverTimestamp() });
+});
+/** Conta de valor variável: o valor real de um mês. */
+export const confirmarFixo = (id, mes, valor) => tenta(async () => {
+  fixoPorId(id);
+  if (!mesOk(mes)) throw new ApiError('Mês inválido.');
+  await updateDoc(finDoc('fixos', id), { ['confirmados.' + mes]: centavos(valor), editadoEm: serverTimestamp() });
+});
+export const apagarFixo = id => tenta(() => deleteDoc(finDoc('fixos', id)));
+export const salvarRenda = ({ id, descricao, valor, dia, tipo, mes }) => tenta(async () => {
+  const extra = tipo === 'extra';
+  const campos = { descricao: textoOk(descricao, 40, 'Dê um nome (ex.: Salário, Freela).'), valor: centavos(valor),
+    tipo: extra ? 'extra' : 'mensal', dia: diaOk(dia) || 1 };
+  if (extra) { campos.mes = mesOk(mes); if (!campos.mes) throw new ApiError('Escolha o mês da renda extra.'); }
+  return { id: await gravar('rendas', id, campos) };
+});
+export const apagarRenda = id => tenta(() => deleteDoc(finDoc('rendas', id)));
+/** Qual cartão/conta a pessoa usou numa despesa que fica num grupo (só ela vê; o grupo não). */
+export const salvarVinculo = (chave, fonteId) => tenta(() =>
+  setDoc(finDoc('vinculos', chave), { fonteId: String(fonteId || '').slice(0, 40), atualizadoEm: serverTimestamp() }, { merge: true }));
+export const chaveVinculoAberto = (colecao, id) => CASA.id + '_' + colecao + '_' + id;
+const configRef = () => doc(fs, 'users', usuarioAtual().uid, 'financas', 'config');
+/** Limite mensal de uma categoria (valor vazio/0 remove o limite). */
+export const salvarLimite = (categoria, valor) => tenta(() => setDoc(configRef(),
+  { limites: { [textoOk(categoria, 40, 'Escolha a categoria.')]: Number(valor) > 0 ? centavos(valor) : deleteField() }, atualizadoEm: serverTimestamp() }, { merge: true }));
+/** Aviso de conta repetida: 'mesmo' (conta só a do grupo) ou 'diferente' (não avisa mais). */
+export const marcarDuplicado = (fixoId, resposta) => tenta(() => setDoc(configRef(),
+  { duplicados: { [fixoId]: resposta === 'mesmo' ? 'mesmo' : 'diferente' }, atualizadoEm: serverTimestamp() }, { merge: true }));
+export const salvarCategorias = categorias => tenta(() => setDoc(configRef(),
+  { categorias: [...new Set(categorias.map(c => String(c).trim().slice(0, 40)).filter(Boolean))].slice(0, 60), atualizadoEm: serverTimestamp() }, { merge: true }));
 
 // ------------------------------------------------------------------ minha conta
 // Nome, email e chave Pix valem para todos os grupos: ficam copiados no registro

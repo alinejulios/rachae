@@ -15,13 +15,17 @@ celular (PWA, Vercel) ──SDK──▶ Firebase Auth (email + senha)
 - **Grupo**: as pessoas que dividem contas (a casa, uma viagem, o casal…). Entra-se por **link de convite**.
 - **Conjuntos de despesas** dentro do grupo (ex.: "Contas fixas", "Viagem"). Cada conjunto pode ter
   todo mundo ou só parte das pessoas, e os saldos são calculados por conjunto.
-- **Pessoal (só você)**: opção marcada ao criar o grupo. Cada pessoa ganha um conjunto privado para
-  acompanhar os próprios gastos — ninguém mais vê (nem quem administra) e não entra na divisão.
-  Aceita despesas e **compras parceladas**: cada parcela entra no painel no mês em que vence
-  (com a opção "1ª parcela só no mês seguinte", para quando a compra cai na fatura seguinte).
+- **Finanças (só você)**: aba com as finanças pessoais, fora dos grupos — ninguém mais vê (nem quem
+  administra). Junta as despesas e contas fixas pessoais, a **sua parte** em cada despesa dos grupos e
+  as despesas "Pessoal (só você)" antigas. Tem renda, benefícios (VR, VA, VT), cartões com fechamento e
+  vencimento (cada compra cai sozinha na fatura certa) e limites por categoria. Cálculos em
+  [`public/js/financas.js`](public/js/financas.js).
 
 No banco, grupo = coleção `households` e conjunto = `households/{id}/grupos` (nomes da primeira
-versão, mantidos para não migrar dados); despesas pessoais ficam em `households/{id}/pessoais/{uid}/despesas` e `.../compras`.
+versão, mantidos para não migrar dados). As finanças pessoais ficam em `users/{uid}/fontes`, `fixos`,
+`lancamentos`, `rendas`, `vinculos` (qual cartão você usou numa despesa de grupo) e `financas/config`.
+As despesas pessoais antigas continuam em `households/{id}/pessoais/{uid}/despesas` e `.../compras`
+(só leitura e edição; não se criam mais lá).
 
 No plano Spark não existe Cloud Functions, então:
 - os **saldos são calculados no aparelho** ([`public/js/calc.js`](public/js/calc.js)), a partir dos lançamentos;
@@ -80,9 +84,8 @@ Faça commit e push; a Vercel publica sozinha em ~30 s.
 
 ### 6. Criar o grupo e convidar as pessoas
 1. Abra o app → **Criar conta** (nome, email, senha).
-2. Em "Falta entrar num grupo", abra **Quero criar um grupo novo** → nome → deixe marcado
-   **Incluir despesas pessoais** se quiser → **Criar grupo**.
-3. Na tela do grupo (ícone de pessoa no topo) → **Compartilhar link de convite**.
+2. Em "Falta entrar num grupo", abra **Quero criar um grupo novo** → nome → **Criar grupo**.
+3. Toque no nome do grupo, no topo → **Configurações do grupo** → **Compartilhar link de convite**.
 4. Quem abrir o link cria a conta e já entra no grupo. Para parar de aceitar gente nova: **Fechar convites**.
 
 O código de convite fica guardado **só no aparelho de quem criou o grupo** (o Firestore não
@@ -117,9 +120,8 @@ ser conferidos sem Firebase, direto no Node, importando `public/js/calc.js`.
 - **Conjuntos de despesas** criados, editados e excluídos pelo próprio app.
 - **Vários grupos por pessoa:** crie ou entre em outros grupos e troque entre eles.
 - **Sair do grupo** (convidados) e **excluir o grupo** (admin, confirmando com o nome). Sem Cloud
-  Functions, o próprio app apaga tudo; as despesas pessoais de cada pessoa num grupo excluído são
-  apagadas no próximo acesso dela.
-- **Despesas pessoais privadas**, ao lado das compartilhadas.
+  Functions, o próprio app apaga tudo. Antes, as despesas pessoais antigas de quem sai (ou do grupo
+  excluído, no próximo acesso de cada pessoa) são **copiadas para Finanças**; se a cópia falhar, nada é apagado.
 - **Pix para receber:** cada pessoa cadastra a chave (CPF, CNPJ, celular, email ou aleatória), nome e
   cidade do titular. O app gera o **BR Code estático** do Banco Central (QR Code e "Pix Copia e Cola",
   com CRC16) já com o valor devido — em "Acertar as contas" e no pagamento de parcelas.
@@ -127,15 +129,21 @@ ser conferidos sem Firebase, direto no Node, importando `public/js/calc.js`.
 - **Saldo do mês e acerto mensal:** além do saldo total, cada conjunto mostra o saldo de cada mês
   (despesas do mês, parcelas que vencem no mês e pagamentos do mês). Cada Pix marcado como pago
   abate o saldo total e o do mês de referência escolhido.
-- **Meus gastos** (menu de baixo): tudo o que é seu em todos os grupos — a sua parte em cada despesa
-  e compra compartilhada e as despesas pessoais —, com total, quanto em cada grupo, gráfico por mês
-  (barras empilhadas por grupo; toque num mês para ver só ele) e filtro por grupo, ano e mês.
+- **Finanças** (menu de baixo): Resumo (total do mês, sobra do salário, benefícios, limites, alertas),
+  Fixos, Cartões (fatura de cada cartão), Previsão (próximos meses e quando as parcelas acabam) e
+  Grupos (a antiga "Meus gastos": a sua parte em cada grupo, por mês). Em "Nova", **Só minha** lança uma
+  despesa pessoal; numa despesa de grupo paga por você, "Pago com" guarda o cartão (só você vê). Com
+  cartão de crédito, o "1ª parcela no mês seguinte" sai do fechamento do cartão.
 - **Parcelas a vencer nos gráficos:** compras parceladas entram parcela a parcela, no mês em que vencem;
-  os meses futuros aparecem em tom mais claro (painel, Pessoal e Meus gastos).
+  os meses futuros aparecem em tom mais claro (painel e Finanças).
 - **Adiantar parcelas e pagar atrasados:** na aba Pagar, cada parcela mostra se está paga, atrasada,
   vence este mês ou a vencer; o pagamento abate da mais antiga para a mais nova (pagar a mais adianta).
-  No Pessoal, "Adiantar parcelas" traz as últimas parcelas para o mês atual. Em "Acertar as contas",
+  Em Finanças, "Adiantar parcelas" traz as últimas parcelas de uma compra pessoal para o mês atual. Em "Acertar as contas",
   a lista de meses em aberto leva direto ao Pix de cada mês.
+- **Topo:** o nome do grupo abre as configurações dele e a troca de grupo; a engrenagem ⚙️ abre o que é só seu:
+  Renda e cartões (a mesma tela do atalho em Finanças) e Minha conta (onde fica o "sair").
+- **Voltar:** toda tela que abre por cima de outra tem "‹ Voltar" no topo; o voltar do Android, o deslizar da borda
+  no Safari e, com o app instalado no iPhone, o deslizar da borda esquerda fazem o mesmo.
 - **Uma tela só para lançar:** "Nova" despesa com a opção **À vista | Parcelado**; no parcelado entram nº de
   parcelas, 1ª parcela no mês seguinte e a prévia dos meses (a antiga aba Parcelada saiu do menu).
 - Sem limite de 5 pessoas.
