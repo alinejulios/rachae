@@ -218,10 +218,13 @@ async function init() {
 // Depois do login: entra no app se já tem casa, senão pede convite / criar casa
 function chaveGrupo() { return K.grupo + '_' + ((STATE.casa && STATE.casa.id) || ''); }
 
-/** Nome para entrar num grupo novo: o do grupo atual, o da conta, ou o começo do email. */
-function nomeParaEntrar(user) {
-  const candidatos = [user.displayName, STATE.pessoa, (user.email || '').split('@')[0].replace(/[^\p{L} ]/gu, ' ').trim()];
-  return candidatos.find(n => n && /^[\p{L}][\p{L} .'-]{0,39}$/u.test(n.trim())) || 'Convidado';
+/**
+ * Nome para entrar num grupo: o da conta, o do grupo atual ou o começo do email, limpos
+ * (conta Google pode vir com emoji, número ou nome comprido, que o grupo não aceita).
+ */
+function nomeParaEntrar(user, preferido) {
+  const candidatos = [preferido, user.displayName, STATE.pessoa, (user.email || '').split('@')[0]];
+  return candidatos.map(Firebase.nomeSugerido).find(Boolean) || 'Convidado';
 }
 
 // ------------------------------------------------------------------ senha forte
@@ -466,14 +469,30 @@ ACTIONS.submit_form_entrar = async form => {
   });
 };
 
+// Erros de digitação comuns no domínio: o link de confirmação iria para um email que não existe
+const DOMINIOS_COMUNS = ['gmail.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'yahoo.com.br', 'yahoo.com', 'live.com', 'uol.com.br', 'bol.com.br'];
+const DOMINIOS_ERRADOS = {
+  'gmail.com': ['gmial.com', 'gmal.com', 'gmai.com', 'gamil.com', 'gnail.com', 'gmail.co', 'gmail.con', 'gmail.cm', 'gmail.om', 'gmail.com.br', 'gmaill.com'],
+  'hotmail.com': ['hotmial.com', 'hotmal.com', 'hotmai.com', 'hotamil.com', 'hotmail.co', 'hotmail.con', 'hotmail.cm', 'homail.com'],
+  'outlook.com': ['outlok.com', 'outloo.com', 'outlook.co', 'outlook.con', 'otlook.com'],
+  'icloud.com': ['iclod.com', 'icloud.co', 'icloud.con', 'icoud.com', 'icluod.com']
+};
+function emailComErro(email) {
+  const dominio = email.split('@')[1].toLowerCase();
+  if (DOMINIOS_COMUNS.includes(dominio)) return null;
+  const certo = Object.keys(DOMINIOS_ERRADOS).find(d => DOMINIOS_ERRADOS[d].includes(dominio))
+    || (/\.(con|cmo|ocm|vom)(\.br)?$/.test(dominio) ? dominio.replace(/\.(con|cmo|ocm|vom)(?=(\.br)?$)/, '.com') : null);
+  return certo ? 'Confira o email: você quis dizer ' + email.split('@')[0] + '@' + certo + '?' : null;
+}
+
 ACTIONS.submit_form_conta = async form => {
-  const nome = $('conta-nome').value.trim().replace(/\s+/g, ' ');
+  const nome = Firebase.nomeValido($('conta-nome').value);
   const email = $('conta-email').value.trim();
   const senha = $('conta-senha').value;
   const convite = $('conta-convite').value.trim().toUpperCase();
-  const erro = !/^[\p{L}][\p{L} .'-]{0,39}$/u.test(nome) ? 'Digite seu nome (até 40 letras, sem números).'
+  const erro = !nome ? 'Digite seu nome (até 40 letras, sem números ou símbolos).'
     : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? 'Digite um email válido.'
-    : problemaSenha(senha, $('conta-senha2').value);
+    : emailComErro(email) || problemaSenha(senha, $('conta-senha2').value);
   if (erro) { hint('conta-hint', erro, 'error'); vibrate(60); return; }
   hint('conta-hint', 'Criando conta...');
   await withBusy(form.querySelector('button[type=submit]'), async () => {
@@ -507,7 +526,7 @@ ACTIONS.submit_form_convite = async form => {
   hint('convite-hint', 'Entrando no grupo...');
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      await Firebase.entrarComConvite(codigo, user.displayName || user.email.split('@')[0]);
+      await Firebase.entrarComConvite(codigo, nomeParaEntrar(user));
       CONVITE_URL = '';
       hint('convite-hint', '');
       await abrirCasa(user);
@@ -520,7 +539,7 @@ ACTIONS.submit_form_nova_casa = async form => {
   const user = Firebase.usuarioAtual();
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      await Firebase.criarCasa($('casa-nome').value, user.displayName || user.email.split('@')[0], false);
+      await Firebase.criarCasa($('casa-nome').value, nomeParaEntrar(user), false);
       await abrirCasa(user);
       switchTab('casa');
       showToast('Grupo criado! Agora convide as pessoas.');
@@ -2710,7 +2729,7 @@ ACTIONS.criarOutraCasa = async form => {
   const user = Firebase.usuarioAtual();
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
-      await abrirOutraCasa(() => Firebase.criarCasa(nome, STATE.pessoa || user.displayName || user.email.split('@')[0], false),
+      await abrirOutraCasa(() => Firebase.criarCasa(nome, nomeParaEntrar(user, STATE.pessoa), false),
         'Grupo criado! Convide as pessoas abaixo.');
       switchTab('casa');
     } catch (err) { onApiError(err); }

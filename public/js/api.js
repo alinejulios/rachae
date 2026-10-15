@@ -63,6 +63,13 @@ const ERROS = {
   'auth/invalid-email': 'Digite um email válido.',
   'auth/email-already-in-use': 'Esse email já tem conta. Use "Já tenho conta" para entrar.',
   'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
+  'auth/password-does-not-meet-requirements': 'A senha não atende às regras: use 8 caracteres ou mais, com letra maiúscula, minúscula, número e símbolo.',
+  'auth/missing-password': 'Digite a senha.',
+  'auth/user-disabled': 'Esta conta foi desativada. Fale com quem administra o Rachaê.',
+  'auth/web-storage-unsupported': 'Este navegador está bloqueando o login (aba anônima ou navegador de dentro de outro app). Abra o link no Safari ou no Chrome.',
+  'auth/internal-error': 'O login falhou. Se abriu o link por dentro de outro app (Instagram, WhatsApp…), abra no Safari ou no Chrome.',
+  'auth/timeout': 'A conexão demorou demais. Tente de novo.',
+  'auth/quota-exceeded': 'Muitos cadastros agora. Espere alguns minutos e tente de novo.',
   'auth/too-many-requests': 'Muitas tentativas. Espere alguns minutos e tente de novo.',
   'auth/network-request-failed': 'Sem conexão com a internet.',
   'auth/configuration-not-found': 'O login ainda não foi ativado no Firebase (Authentication > Método de login > E-mail/senha).',
@@ -112,7 +119,8 @@ export const entrar = (email, senha) => tenta(async () => {
 export const criarConta = (nome, email, senha, continuar = location.origin + '/') => tenta(async () => {
   exigirConfig();
   const { user } = await createUserWithEmailAndPassword(auth, email.trim(), senha);
-  await updateProfile(user, { displayName: nome });
+  // A conta já existe: se gravar o nome falhar, segue (o nome é pedido de novo ao entrar no grupo)
+  await updateProfile(user, { displayName: nome }).catch(e => console.warn('Nome da conta não salvo:', e.code));
   // Falhou o envio? A conta já existe: a tela de confirmação mostra o erro e deixa reenviar
   await mandarConfirmacao(user, continuar).catch(e => { ERRO_CONFIRMACAO = traduz(e).message; });
   return user;
@@ -311,9 +319,24 @@ function gerarCodigo(n = 10) {
   const bytes = crypto.getRandomValues(new Uint8Array(n));
   return Array.from(bytes, b => alfabeto[b % alfabeto.length]).join('');
 }
+// NFC: alguns teclados e textos colados mandam o acento separado da letra ("u" + "´"),
+// que não casa com \p{L}; \p{M} aceita o que sobrar de marcas combinadas.
+const NOME_RE = /^\p{L}[\p{L}\p{M} .'-]{0,39}$/u;
+const normalizarNome = nome => String(nome || '').normalize('NFC').trim().replace(/\s+/g, ' ');
+/** O nome digitado já normalizado, ou '' se não serve (números, símbolos, mais de 40 letras). */
+export function nomeValido(nome) {
+  const n = normalizarNome(nome);
+  return NOME_RE.test(n) ? n : '';
+}
+/** Aproveita um nome que veio de fora (conta Google, começo do email): tira números e símbolos e corta em 40. */
+export function nomeSugerido(texto) {
+  const n = normalizarNome(String(texto || '').replace(/[^\p{L}\p{M} .'-]/gu, ' '))
+    .replace(/^[^\p{L}]+/u, '').slice(0, 40).trim();
+  return nomeValido(n);
+}
 function validarNome(nome) {
-  const n = String(nome || '').trim().replace(/\s+/g, ' ');
-  if (!/^[\p{L}][\p{L} .'-]{0,39}$/u.test(n)) throw new ApiError('Digite um nome de até 40 letras (sem números ou símbolos).');
+  const n = nomeValido(nome);
+  if (!n) throw new ApiError('Digite um nome de até 40 letras (sem números ou símbolos).');
   return n;
 }
 
