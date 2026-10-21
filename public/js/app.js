@@ -16,6 +16,23 @@ const MESES_LONGOS = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho'
 const CAT_PALETTE_VARS = ['--cat-1', '--cat-2', '--cat-3', '--cat-4', '--cat-5', '--cat-6', '--cat-7', '--cat-8'];
 const $ = id => document.getElementById(id);
 
+// Ícones de traço do design system (no lugar de emoji): viewBox 24, cor do texto.
+const ICONES = {
+  ok: '<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5 11 15l4.5-6"/>',
+  grupo: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+  mais: '<path d="M12 5v14M5 12h14"/>',
+  conta: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/>',
+  cartao: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
+  sair: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>',
+  alerta: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/>',
+  repetir: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  lapis: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  subindo: '<path d="m22 7-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/>',
+  semRede: '<path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2.3-1.6M2 8.8a15 15 0 0 1 4.2-2.6M22 8.8A15 15 0 0 0 10.7 5M12 20h.01"/>',
+};
+const icone = (nome, traco = 2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${traco}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONES[nome]}</svg>`;
+
 // ---------- Armazenamento local (tudo em try/catch: modo privado do Safari pode bloquear) ----------
 const store = {
   get(key, fallback = null) {
@@ -78,13 +95,57 @@ function showToast(msg, isError) {
 function vibrate(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} }
 function onApiError(err) {
   if (err && err.code === 'AUTH') { showToast(err.message, true); goToLogin(); return; }
-  if (err && err.code === 'permission-denied') { showToast('Sem permissão. Talvez você tenha sido removida(o) do grupo.', true); return; }
+  if (err && err.code === 'permission-denied') { showToast('Sem permissão. Talvez você não faça mais parte deste grupo.', true); return; }
   showToast((err && err.message) || 'Erro inesperado.', true);
 }
+/** Texto do botão enquanto a ação roda: "Salvar despesa" → "Salvando despesa…", "Entrar" → "Entrando…". */
+function textoOcupado(rotulo) {
+  const t = String(rotulo || '').trim(), m = /^(\S+?)(ar|er|ir)(\s|$)/i.exec(t);
+  if (!m) return 'Aguarde…';
+  return m[1] + { ar: 'ando', er: 'endo', ir: 'indo' }[m[2].toLowerCase()] + t.slice(m[1].length + 2).replace(/[.…]+$/, '') + '…';
+}
 async function withBusy(btn, fn) {
-  if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = 'Enviando...'; }
+  if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = btn.dataset.busy || textoOcupado(btn.textContent); }
   try { return await fn(); }
   finally { if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = btn.dataset.label; } }
+}
+
+// ---------- Estados de tela: carregando (esqueleto), vazio e erro ----------
+const SK = (cls, estilo = '') => `<span class="sk ${cls}"${estilo ? ` style="${estilo}"` : ''}></span>`;
+const skLinha = largura => `<div class="list-row">${SK('sk-line', 'width:' + largura)}${SK('sk-line', 'width:64px')}</div>`;
+/** Esqueleto no formato do conteúdo que vai chegar. `tipo`: 'saldo' (Hero + lista) ou 'lista'. */
+function carregandoHtml(tipo, texto) {
+  const hero = `<div class="card hero">${SK('sk-line', 'width:50%;margin:0 auto')}${SK('sk-value')}${SK('sk-pill')}
+    <div class="stat-row">${SK('sk-tile')}${SK('sk-tile')}</div></div>`;
+  return `<div class="carregando" aria-busy="true"><span class="visually-hidden">${h(texto)}</span>
+    ${tipo === 'saldo' ? hero : ''}
+    <div class="card">${SK('sk-line', 'width:40%;margin-bottom:6px')}${skLinha('70%')}${skLinha('55%')}${skLinha('62%')}</div></div>`;
+}
+/** Mostra o esqueleto em `el`; se passar de 8s ainda carregando, avisa e oferece tentar de novo. */
+function mostrarCarregando(el, tipo, texto) {
+  el.innerHTML = carregandoHtml(tipo, texto);
+  const esq = el.firstElementChild;
+  setTimeout(() => {
+    if (!esq.isConnected) return;
+    esq.insertAdjacentHTML('afterbegin', `<div class="demora" role="status">Está demorando mais que o normal.
+      <button type="button" class="link-btn" data-action="refresh">Tentar de novo</button></div>`);
+  }, 8000);
+}
+/** Caixa de erro fixa: o que falhou, o que fazer e uma ação. Nunca a mensagem técnica do servidor. */
+function erroHtml(err, acao = 'carregar') {
+  const semRede = (typeof navigator !== 'undefined' && navigator.onLine === false) || (err && err.code === 'unavailable');
+  const semAcesso = err && err.code === 'permission-denied';
+  const [titulo, texto, botao] = semAcesso
+    ? ['Você não tem mais acesso a este grupo.', 'Peça um novo convite a quem administra.', '<button type="button" class="link-btn" data-action="menuIr" data-ir="grupos">Ver meus grupos</button>']
+    : semRede ? ['Não deu para ' + acao + '.', 'Confira a internet.', '<button type="button" class="link-btn" data-action="refresh">Tentar de novo</button>']
+    : ['Algo deu errado.', 'Tente de novo. Se continuar, saia e entre de novo.', '<button type="button" class="link-btn" data-action="refresh">Tentar de novo</button>'];
+  return `<div class="erro-caixa" role="alert">${icone(semRede ? 'semRede' : 'alerta')}<div><b>${titulo}</b>${texto}<br>${botao}</div></div>`;
+}
+/** Erro ao carregar uma tela: sessão expirada vai para o login; o resto vira a caixa de erro no lugar do conteúdo. */
+function erroAoCarregar(el, err) {
+  if (err && err.code === 'AUTH') { onApiError(err); return; }
+  console.error(err);
+  el.innerHTML = erroHtml(err);
 }
 
 // ---------- Janelas de confirmação e de pergunta, desenhadas pelo app ----------
@@ -554,8 +615,8 @@ function enterApp(nome) {
   document.body.classList.remove('on-login');
   $('screen-login').classList.add('hidden');
   $('screen-app').classList.remove('hidden');
-  $('who-name').textContent = nome;
   $('who-casa').textContent = (STATE.casa && STATE.casa.nome) || 'Rachaê';
+  atualizarTopo();
   loadGrupos();
   Firebase.sincronizarConta().catch(() => {});
   // Convites por email para outros grupos aparecem no Início
@@ -575,7 +636,7 @@ async function atualizarAoVivo() {
     STATE.config = await api('config');
     applyGrupos(await api('grupos'));
     const meuNome = await api('meuNome');
-    if (meuNome && meuNome !== STATE.pessoa) { STATE.pessoa = meuNome; $('who-name').textContent = meuNome; }
+    if (meuNome && meuNome !== STATE.pessoa) { STATE.pessoa = meuNome; atualizarTopo(); }
     if (STATE.casa) $('who-casa').textContent = Firebase.casaAtual().nome;
     const saiuDaCasa = !meuNome;
     if (saiuDaCasa) { showToast('Você não faz mais parte deste grupo.', true); goToLogin(); return; }
@@ -590,7 +651,7 @@ async function loadGrupos() {
   try {
     applyGrupos(await api('grupos'));
   } catch (err) {
-    showToast('Erro ao carregar conjuntos: ' + err.message, true);
+    showToast('Não deu para carregar os conjuntos. Confira a internet.', true);
     STATE.grupos = [];
   }
   // Ao abrir outro grupo, vai para o painel dele (exceto logo após criar, que abre os ajustes)
@@ -605,19 +666,38 @@ function applyGrupos(grupos) {
     : (meusGrupos[0] ? meusGrupos[0].nome : (STATE.grupos[0] ? STATE.grupos[0].nome : null));
   renderGrupoSwitcher();
 }
+// Troca de conjunto: um segmented no alto das telas que mostram um conjunto (Início, Pagar, Histórico),
+// só quando há mais de um. O conjunto ativo aparece embaixo do nome do grupo, no topo.
+const TELAS_COM_CONJUNTO = ['dashboard', 'pagamento', 'historico'];
 function renderGrupoSwitcher() {
-  const sel = $('grupo-switcher');
-  const opcoes = STATE.grupos.map(g => ({ valor: g.nome, rotulo: g.nome }));
-  sel.classList.toggle('hidden', opcoes.length <= 1);
-  if (!opcoes.length) { sel.innerHTML = '<option value="">Sem conjuntos</option>'; return; }
-  sel.innerHTML = opcoes.map(o =>
-    `<option value="${h(o.valor)}" ${o.valor === STATE.grupoAtual ? 'selected' : ''}>${h(o.rotulo)}</option>`).join('');
+  const bar = $('conjunto-bar');
+  const visivel = STATE.grupos.length > 1 && TELAS_COM_CONJUNTO.includes(STATE.currentTab);
+  bar.classList.toggle('hidden', !visivel);
+  bar.innerHTML = visivel ? `<div class="segmented rolavel" role="radiogroup" aria-label="Conjunto de despesas">${STATE.grupos.map(g => {
+    const ativo = g.nome === STATE.grupoAtual;
+    return `<button type="button" role="radio" aria-checked="${ativo}" class="${ativo ? 'active' : ''}" data-action="onGrupoSwitch" data-nome="${h(g.nome)}">${h(g.nome)}</button>`;
+  }).join('')}</div>` : '';
+  // Conjunto ativo à vista, rolando só o seletor (nunca a página)
+  const seg = bar.firstElementChild, ativo = bar.querySelector('.active');
+  if (seg && ativo) {
+    const x = ativo.getBoundingClientRect().left - seg.getBoundingClientRect().left + seg.scrollLeft;
+    seg.scrollLeft = Math.max(0, x - (seg.clientWidth - ativo.offsetWidth) / 2);
+  }
+  atualizarTopo();
 }
-ACTIONS.onGrupoSwitch = sel => {
-  STATE.grupoAtual = sel.value;
-  store.set(chaveGrupo(), sel.value);
+ACTIONS.onGrupoSwitch = el => {
+  if (el.dataset.nome === STATE.grupoAtual) return;
+  STATE.grupoAtual = el.dataset.nome;
+  store.set(chaveGrupo(), el.dataset.nome);
+  renderGrupoSwitcher();
   refreshCurrentTabData();
 };
+/** Topo: subtítulo com o conjunto ativo ("Todos os grupos" em Finanças) e a inicial da pessoa no avatar. */
+function atualizarTopo() {
+  const sub = $('who-sub'), av = $('who-avatar');
+  if (sub) sub.textContent = STATE.currentTab === 'gastos' ? 'Todos os grupos' : (STATE.grupoAtual || '');
+  if (av) av.textContent = (String(STATE.pessoa || '').trim()[0] || '?').toUpperCase();
+}
 function refreshCurrentTabData() {
   switchTab(STATE.currentTab, { keepScroll: true, manterPilha: true });
 }
@@ -764,7 +844,7 @@ ACTIONS.periodoIr = el => irParaMes(el.dataset.mes);
 // Tocar no menu de baixo zera o caminho.
 const TELAS_QUE_SOBEM = ['casa', 'grupos', 'conta'];
 const NOMES_TELA = { dashboard: 'Início', despesa: 'Nova', pagamento: 'Pagar', historico: 'Histórico', gastos: 'Finanças',
-  casa: 'Configurações do grupo', grupos: 'Meus grupos', conta: 'Minha conta' };
+  casa: 'Ajustes do grupo', grupos: 'Meus grupos', conta: 'Minha conta' };
 let NAV = [];
 const ondeEstou = () => ({ tab: STATE.currentTab, finAba: FIN_UI.aba, scroll: window.scrollY });
 // Cada passo do caminho também vira uma entrada no histórico do navegador: assim o botão/gesto de voltar
@@ -822,8 +902,8 @@ function atualizarVoltar() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>${h(nome)}</button>`;
 }
 // ---------- Menus do topo
-// Nome do grupo (esquerda): configurações do grupo e troca de grupo. Engrenagem (direita): o que é seu —
-// Renda e cartões (a mesma tela do atalho em Finanças) e Minha conta.
+// Cada alvo do topo tem um papel só: nome do grupo (esquerda) troca de grupo; engrenagem abre Ajustes do grupo;
+// avatar (direita) abre o que é seu — Minha conta, Renda e cartões e Sair.
 let MENU_TOPO = null; // null | 'grupo' | 'conta'
 function fecharMenuTopo() {
   MENU_TOPO = null;
@@ -831,8 +911,8 @@ function fecharMenuTopo() {
   if (m) { m.classList.add('hidden'); m.innerHTML = ''; }
   document.querySelectorAll('[data-action="menuTopo"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
 }
-const itemMenu = (icone, titulo, sub, attrs) => `<button type="button" class="menu-item" role="menuitem" ${attrs}>
-  <span class="menu-ic" aria-hidden="true">${icone}</span><span class="menu-txt">${h(titulo)}${sub ? `<small>${h(sub)}</small>` : ''}</span></button>`;
+const itemMenu = (ic, titulo, sub, attrs, tom = '') => `<button type="button" class="menu-item" role="menuitem" ${attrs}>
+  <span class="menu-ic${tom ? ' ' + tom : ''}">${icone(ic, ic === 'ok' ? 2.5 : 2)}</span><span class="menu-txt">${h(titulo)}${sub ? `<small>${h(sub)}</small>` : ''}</span></button>`;
 async function abrirMenuTopo(qual, botao) {
   if (MENU_TOPO === qual) { fecharMenuTopo(); return; }
   fecharMenuTopo();
@@ -842,28 +922,31 @@ async function abrirMenuTopo(qual, botao) {
   m.className = 'menu-topo ' + (qual === 'grupo' ? 'esq' : 'dir');
   const casa = Firebase.casaAtual();
   if (qual === 'conta') {
+    const eu = Firebase.usuarioAtual();
     m.innerHTML = `
-      ${itemMenu('💳', 'Renda e cartões', 'Salário, benefícios, cartões e limites', 'data-action="abrirRendaCartoes"')}
-      ${itemMenu('👤', 'Minha conta', 'Nome, email, senha e chave Pix', 'data-action="menuIr" data-ir="conta"')}`;
+      <div class="menu-titulo">${h(STATE.pessoa || 'Você')}${eu && eu.email ? `<small>${h(eu.email)}</small>` : ''}</div>
+      ${itemMenu('conta', 'Minha conta', 'Nome, chave Pix e senha', 'data-action="menuIr" data-ir="conta"')}
+      ${itemMenu('cartao', 'Renda e cartões', 'Só você vê', 'data-action="abrirRendaCartoes"')}
+      <div class="menu-sep"></div>
+      ${itemMenu('sair', 'Sair', '', 'data-action="logout"', 'perigo')}`;
     return;
   }
   const outros = casas => casas.filter(c => !casa || c.id !== casa.id);
   const desenhar = casas => {
     if (MENU_TOPO !== 'grupo') return;
     m.innerHTML = `
-      <div class="menu-titulo">${h(casa ? casa.nome : 'Grupo')}${Firebase.souDono() ? '<span class="badge">admin</span>' : ''}</div>
-      ${itemMenu('⚙️', 'Configurações do grupo', 'Pessoas, convites e conjuntos de despesas', 'data-action="menuIr" data-ir="casa"')}
-      <div class="menu-sep"></div>
-      <div class="menu-rotulo">Trocar de grupo</div>
+      <div class="menu-rotulo">Seus grupos</div>
+      ${casa ? itemMenu('ok', casa.nome, Firebase.souDono() ? 'grupo aberto · admin' : 'grupo aberto', 'aria-current="true" data-action="fecharMenu"') : ''}
       ${casas === null ? '<p class="menu-vazio">Carregando…</p>'
-        : outros(casas).map(c => itemMenu('↔', c.nome, c.souDono ? 'admin' : '', `data-action="trocarCasa" data-id="${h(c.id)}"`)).join('')
-          || '<p class="menu-vazio">Você só está neste grupo.</p>'}
-      ${itemMenu('+', 'Criar ou entrar em outro grupo', '', 'data-action="menuIr" data-ir="grupos"')}`;
+        : outros(casas).map(c => itemMenu('grupo', c.nome, c.souDono ? 'admin' : '', `data-action="trocarCasa" data-id="${h(c.id)}"`)).join('')}
+      <div class="menu-sep"></div>
+      ${itemMenu('mais', 'Criar ou entrar num grupo', '', 'data-action="menuIr" data-ir="grupos"')}`;
   };
   desenhar(null);
   desenhar(await Firebase.minhasCasas().catch(() => []));
 }
 ACTIONS.menuTopo = (el, ev) => { ev.stopPropagation(); abrirMenuTopo(el.dataset.menu, el); };
+ACTIONS.fecharMenu = () => fecharMenuTopo();
 ACTIONS.menuIr = el => {
   const tab = el.dataset.ir;
   fecharMenuTopo();
@@ -889,8 +972,9 @@ function switchTab(tab, opts = {}) {
   // Finanças pelo menu de baixo abre sempre a tela de Finanças (na última aba usada), nunca Renda e cartões
   if (tab === 'gastos' && !opts.manterPilha && FIN_UI.aba === 'config') { FIN_UI.aba = store.get(K.finAba, 'resumo'); FIN_UI.form = null; }
   STATE.currentTab = tab;
-  document.body.classList.toggle('na-financas', tab === 'gastos'); // Finanças junta todos os grupos: o seletor de conjunto não vale lá
+  document.body.classList.toggle('na-financas', tab === 'gastos');
   fecharMenuTopo();
+  renderGrupoSwitcher(); // o seletor de conjunto só aparece nas telas que mostram um conjunto
   ['dashboard', 'despesa', 'pagamento', 'historico', 'casa', 'grupos', 'gastos', 'conta'].forEach(t => {
     $('tab-' + t).classList.toggle('hidden', t !== tab);
   });
@@ -915,6 +999,8 @@ function switchTab(tab, opts = {}) {
 // =================================================================== Dashboard
 async function loadDashboard() {
   const grupo = STATE.grupoAtual;
+  const el = $('tab-dashboard');
+  if (!el.children.length || el.querySelector('.erro-caixa')) mostrarCarregando(el, 'saldo', 'Carregando seu saldo');
   try {
     const d = await api('dashboard', { grupo });
     if (STATE.currentTab !== 'dashboard') return;
@@ -926,9 +1012,7 @@ async function loadDashboard() {
     }
     renderDashboard(d);
   } catch (err) {
-    onApiError(err);
-    $('tab-dashboard').innerHTML = `<div class="card"><p class="empty">${h(err.message)}</p>
-      <button class="primary" type="button" data-action="refresh">Tentar de novo</button></div>`;
+    erroAoCarregar(el, err);
   }
 }
 function statusIconSvg(kind) {
@@ -1041,7 +1125,7 @@ function saldoTileHtml(rotulo, v) {
 }
 function renderSaldoBars(saldos) {
   const wrap = $('saldos-bars');
-  if (!saldos.length) { wrap.innerHTML = '<p class="empty">Sem lançamentos ainda.</p>'; return; }
+  if (!saldos.length) { wrap.innerHTML = '<div class="empty">Nenhuma despesa lançada ainda.<button class="secondary" type="button" data-tab="despesa">Lançar despesa</button></div>'; return; }
   const max = Math.max(1, ...saldos.map(s => Math.abs(s.saldoGeral)));
   wrap.innerHTML = saldos.map(s => {
     const good = s.saldoGeral >= 0;
@@ -1254,7 +1338,7 @@ function renderDespesaForm() {
   }
   if (EDITANDO_FIN || (!EDITANDO && DESP_DONO === 'eu')) { renderFormPessoal(); return; }
   if (!STATE.grupos.length) {
-    el.innerHTML = '<div class="card"><h3>Nova despesa</h3><p class="empty">Nenhum conjunto de despesas ainda. Crie um na tela do grupo (ícone de pessoa, no topo).</p></div>';
+    el.innerHTML = `<div class="card"><h3>Nova despesa</h3><div class="empty">Nenhum conjunto de despesas ainda.<button class="secondary" type="button" data-action="menuIr" data-ir="casa">${icone('mais')}Criar conjunto</button></div></div>`;
     return;
   }
   const ed = EDITANDO && EDITANDO.dados;
@@ -1294,7 +1378,7 @@ function renderDespesaForm() {
       <div id="desp-fixo-box" class="hidden">
         ${ed && ed.jaRepetiu ? `
         <input type="checkbox" id="desp-fixo" class="hidden" checked>
-        <p class="hint">🔁 Conta fixa: repete sozinha todo mês. O valor aqui vale a partir deste mês (${h(ed.data.slice(5, 7) + '/' + ed.data.slice(0, 4))})
+        <p class="hint">Conta fixa: repete sozinha todo mês. O valor aqui vale a partir deste mês (${h(ed.data.slice(5, 7) + '/' + ed.data.slice(0, 4))})
           nos meses sem mudança de valor. Para mudar o valor ou encerrar a partir de outro mês, use os botões no Histórico, no mês desejado.</p>` : `
         <label class="participa-item" style="margin-top:10px">
           <input type="checkbox" id="desp-fixo" ${ed && ed.valorFixo ? 'checked' : ''}>
@@ -1392,8 +1476,8 @@ function renderPessoasFields(prefixOrEl) {
   if (prefix === 'desp') ACTIONS.atualizarValorFixo();
   if (pessoal) {
     $(prefix + '-pessoas-fields').innerHTML = (parcelado
-      ? '<p class="hint">🔒 Compra pessoal: só você vê. Cada parcela entra no painel no mês em que vence, a partir do mês da compra.</p>'
-      : '<p class="hint">🔒 Despesa pessoal: só você vê e ela não entra na divisão do grupo.</p>');
+      ? '<p class="hint">Compra pessoal: só você vê. Cada parcela entra no painel no mês em que vence, a partir do mês da compra.</p>'
+      : '<p class="hint">Despesa pessoal: só você vê e ela não entra na divisão do grupo.</p>');
     return;
   }
   let membros = grupoMembros($(prefix + '-grupo').value);
@@ -1470,7 +1554,7 @@ function atualizarPagoCom() {
   box.innerHTML = !pagouEu ? '' : fontesAtivas().length ? `
     <span class="field-label">Pago com</span>
     ${pagoComChipsHtml('desp', DESP_FONTE)}
-    <p class="privado">🔒 Só você vê em qual cartão pagou. Na fatura entra o valor inteiro; em Finanças, só a sua parte.</p>
+    <p class="privado">Só você vê em qual cartão pagou. Na fatura entra o valor inteiro; em Finanças, só a sua parte.</p>
     <div id="desp-fatura-hint"></div>`
     : '<p class="privado">Cadastre seus cartões em Finanças › Renda e cartões para dizer em qual pagou (só você vê).</p>';
   ACTIONS.updateParcelaPreview();
@@ -1675,7 +1759,7 @@ ACTIONS.updateParcelaPreview = () => {
   const cartao = despCartao();
   if ($('desp-seguinte-box')) $('desp-seguinte-box').classList.toggle('hidden', !!cartao);
   const data = ($('desp-data') && $('desp-data').value) || todayStr();
-  if ($('desp-fatura-hint')) $('desp-fatura-hint').innerHTML = cartao ? `<div class="fatura-hint"><span>💳</span><span>${textoFatura(cartao, data)}</span></div>` : '';
+  if ($('desp-fatura-hint')) $('desp-fatura-hint').innerHTML = cartao ? `<div class="fatura-hint">${icone('cartao')}<span>${textoFatura(cartao, data)}</span></div>` : '';
   if (!DESP_PARCELADO || !$('desp-parcela-hint')) return;
   const valor = parseMoney($('desp-valor').value) || 0;
   const n = parseInt($('desp-nparc').value, 10) || 0;
@@ -1727,7 +1811,7 @@ function renderFormPessoal() {
       <input type="date" id="fin-data" data-change="finAtualizar" value="${d ? (fixo ? d.desde + '-01' : d.data) : todayStr()}">
       <label for="fin-categoria">Categoria</label>
       <select id="fin-categoria" data-change="escolherCategoria" data-antes="${h(cat)}">${opcoesCategoria(cat, cat)}</select>
-      <p class="hint">🔒 Só você vê. Não entra na divisão de nenhum grupo.</p>
+      <p class="hint">Só você vê. Não entra na divisão de nenhum grupo.</p>
       <button class="primary" type="submit">${ed ? 'Salvar alterações' : fixo ? 'Adicionar conta fixa' : parc ? 'Adicionar despesa parcelada' : 'Adicionar despesa'}</button>
       ${ed ? '<button class="secondary" type="button" data-action="cancelarEdicao" style="margin-top:10px">Cancelar</button>' : ''}
     </form>`;
@@ -1748,7 +1832,7 @@ ACTIONS.finAtualizar = () => {
   const t = FIN_FORM.tipo;
   const data = $('fin-data').value || todayStr();
   $('fin-seguinte-box').classList.toggle('hidden', t !== 'parcelado' || cartao);
-  $('fin-fatura-hint').innerHTML = cartao ? `<div class="fatura-hint"><span>💳</span><span>${t === 'fixo'
+  $('fin-fatura-hint').innerHTML = cartao ? `<div class="fatura-hint">${icone('cartao')}<span>${t === 'fixo'
     ? `Cobrada todo mês na fatura do <b>${h(f.nome)}</b>.` : textoFatura(f, data)}</span></div>` : '';
   const ph = $('fin-parcela-hint');
   if (t !== 'parcelado') { ph.textContent = ''; return; }
@@ -1838,15 +1922,13 @@ function podePagarPorOutra() { return Firebase.souDono(); }
 async function renderPagamentoForm() {
   const el = $('tab-pagamento');
   if (!podePagarPorOutra() || !grupoMembros(STATE.grupoAtual).includes(PAG_PESSOA)) PAG_PESSOA = null;
-  el.innerHTML = '<div class="spinner">Carregando compras em aberto...</div>';
+  mostrarCarregando(el, 'lista', 'Carregando compras em aberto');
   try {
     const compras = await api('comprasParaPagamento', { grupo: STATE.grupoAtual, pessoa: PAG_PESSOA });
     if (STATE.currentTab !== 'pagamento') return;
     renderPagamentoFormBody(compras);
   } catch (err) {
-    onApiError(err);
-    el.innerHTML = `<div class="card"><p class="empty">${h(err.message)}</p>
-      <button class="primary" type="button" data-action="refresh">Tentar de novo</button></div>`;
+    erroAoCarregar(el, err);
   }
 }
 let COMPRAS_ABERTAS = [];
@@ -1861,7 +1943,7 @@ function renderPagamentoFormBody(compras) {
   if (!compras.length) {
     el.innerHTML = `<div class="card"><h3>Registrar pagamento</h3>${seletor}<p class="empty">${porOutra
         ? h(PAG_PESSOA) + ' não tem nenhuma parcela em aberto neste conjunto.'
-        : 'Você não tem nenhuma parcela em aberto neste conjunto 🎉'}</p></div>`;
+        : 'Você não tem nenhuma parcela em aberto neste conjunto.'}</p></div>`;
     return;
   }
   el.innerHTML = `
@@ -1962,15 +2044,13 @@ ACTIONS.submitPagamento = async form => {
 let HIST_SEG = 'despesas';
 async function loadHistorico() {
   const el = $('tab-historico');
-  el.innerHTML = '<div class="spinner">Carregando...</div>';
+  mostrarCarregando(el, 'lista', 'Carregando o histórico');
   try {
     const data = await api('historico', { grupo: STATE.grupoAtual });
     if (STATE.currentTab !== 'historico') return;
     renderHistorico(data);
   } catch (err) {
-    onApiError(err);
-    el.innerHTML = `<div class="card"><p class="empty">${h(err.message)}</p>
-      <button class="primary" type="button" data-action="refresh">Tentar de novo</button></div>`;
+    erroAoCarregar(el, err);
   }
 }
 function renderHistorico(data) {
@@ -1983,7 +2063,7 @@ function renderHistorico(data) {
     </div>
     ${card('despesas', data.despesas.length ? data.despesas.map(d => `
       <div class="hist-item">
-        <div class="top"><span>${d.acerto ? '💸 ' : d.valorFixo ? '🔁 ' : ''}${h(d.descricao)}</span><span>${fmtBRL(d.valor)}</span></div>
+        <div class="top"><span>${h(d.descricao)}${d.acerto ? ' <span class="pill">acerto</span>' : d.valorFixo ? ' <span class="pill">conta fixa</span>' : ''}</span><span>${fmtBRL(d.valor)}</span></div>
         <div class="sub">${d.acerto ? h(d.data) + ' · acerto de contas via Pix' + composicaoAcertoHtml(d.composicao)
           : `${h(d.data)} · ${h(d.categoria)}${d.segmento ? ' · ' + h(d.segmento) : ''} · pago por ${h(d.pagoPor)} · ${h(d.metodo)}${
             d.automatica ? ' · lançada automaticamente (conta fixa)' : d.valorFixo ? ' · conta fixa, repete todo mês' + (d.encerradaEm ? ' até ' + h(d.encerradaEm.slice(5) + '/' + d.encerradaEm.slice(0, 4)) : '') : ''}`}</div>
@@ -1994,7 +2074,7 @@ function renderHistorico(data) {
         : `${editarBtn('despesas', d.id, 'desp:' + d.row, d.podeApagar && !d.acerto)}
         ${d.valorFixo ? (d.podeApagar ? `<button type="button" class="del-btn" data-action="apagarItem" data-colecao="despesas" data-id="${h(d.id)}" data-fixa="1">Apagar</button>` : '')
           : apagarBtn('despesas', d.id, d.podeApagar)}`}
-      </div>`).join('') : '<p class="empty">Nenhuma despesa lançada ainda.</p>')}
+      </div>`).join('') : '<div class="empty">Nenhuma despesa lançada ainda.<button class="secondary" type="button" data-tab="despesa">Lançar despesa</button></div>')}
     ${card('compras', data.compras.length ? data.compras.map(c => `
       <div class="hist-item">
         <div class="top"><span>${h(c.descricao)}</span><span>${fmtBRL(c.valorTotal)}</span></div>
@@ -2104,7 +2184,7 @@ function qrSvg(texto) {
  */
 function pixPainelHtml({ pix, valor, paraNome }) {
   if (!pix) {
-    return `<p class="hint warn">${h(paraNome)} ainda não cadastrou uma chave Pix. Peça para ela(e) cadastrar em ⚙️ Ajustes → Minha chave Pix.</p>`;
+    return `<p class="hint warn">${h(paraNome)} ainda não cadastrou uma chave Pix. Peça para cadastrar a chave em Minha conta.</p>`;
   }
   let copiaCola = '';
   try { copiaCola = payloadPix({ chave: pix.chave, nome: pix.nome, cidade: pix.cidade, valor }); }
@@ -2169,7 +2249,7 @@ function meuPixHtml(meuPix) {
 function ajustarCampoChave() {
   const tipo = $('pix-tipo').value, input = $('pix-chave'), hintEl = $('pix-chave-hint');
   const cfg = {
-    cpf: ['numeric', '000.000.000-00', '⚠️ A chave CPF fica visível (parcialmente mascarada) para as pessoas do grupo. Se preferir, use celular, email ou chave aleatória.'],
+    cpf: ['numeric', '000.000.000-00', 'A chave CPF fica visível (parcialmente mascarada) para as pessoas do grupo. Se preferir, use celular, email ou chave aleatória.'],
     cnpj: ['numeric', '00.000.000/0000-00', ''],
     telefone: ['tel', '(11) 99999-8888', ''],
     email: ['email', 'seuemail@exemplo.com', ''],
@@ -2225,8 +2305,8 @@ function acertosHtml(d) {
   const eu = Firebase.usuarioAtual().uid;
   const lista = listaAcertos(d);
   if (!lista.length) {
-    return ACERTO_MES === 'tudo' ? '<p class="empty">Tudo quitado neste conjunto 🎉</p>'
-      : '<p class="empty">' + labelMes(STATE.mesAcerto) + ' está quitado 🎉</p>';
+    const quitado = texto => `<div class="empty"><span class="selo-ok">${icone('ok', 2.5)}${texto}</span></div>`;
+    return ACERTO_MES === 'tudo' ? quitado('Tudo quitado neste conjunto') : quitado(h(labelMes(STATE.mesAcerto)) + ' está quitado');
   }
   return lista.map((a, i) => {
     const chave = a.de + '>' + a.para;
@@ -2386,7 +2466,6 @@ async function renderCasa() {
   const eu = Firebase.usuarioAtual();
   el.innerHTML = `
     <h2 class="page-title">Ajustes de ${h(casa.nome)}</h2>
-    <p class="escopo">Tudo aqui vale só para este grupo. Para trocar de grupo, toque no nome dele no topo; sua conta e sua renda ficam na engrenagem ⚙️.</p>
     <div class="card">
       ${EDITANDO_NOME === 'grupo' ? `
         <form data-submit="salvarNomeGrupo" novalidate>
@@ -2413,8 +2492,8 @@ async function renderCasa() {
 
     <div class="card">
       <h3>Meu nome e minha chave Pix</h3>
-      <p class="hint" style="margin-top:0">Valem para todos os seus grupos. Para mudar, use Minha conta, na engrenagem ⚙️ do topo.</p>
-      <button class="secondary" type="button" data-tab="conta">Abrir Minha conta</button>
+      <p class="hint" style="margin-top:0">Valem para todos os seus grupos.</p>
+      <button class="secondary" type="button" data-tab="conta">Editar meus dados</button>
     </div>
 
     ${dono ? `
@@ -2480,7 +2559,7 @@ async function renderMeusGrupos() {
   const [casas, convites] = await Promise.all([Firebase.minhasCasas().catch(() => []), carregarConvitesPendentes()]);
   el.innerHTML = `
     <h2 class="page-title">Meus grupos</h2>
-    <p class="page-sub">Toque num grupo para abrir. As configurações de cada grupo ficam no nome dele, no topo.</p>
+    <p class="page-sub">Toque num grupo para abrir.</p>
     ${convitesPendentesHtml(convites)}
     <div class="card">
       ${casas.map(c => `
@@ -2504,7 +2583,7 @@ async function renderMeusGrupos() {
   `;
   if (OUTRA_CASA !== null) renderOutraCasaForm();
 }
-/** Minha conta (engrenagem do topo): nome, email, Pix, senha e Google — valem para todos os grupos. */
+/** Minha conta (avatar do topo): nome, email, Pix, senha e Google — valem para todos os grupos. */
 async function renderMinhaConta() {
   const el = $('tab-conta');
   const meuPix = await api('meuPix').catch(() => null);
@@ -2600,7 +2679,7 @@ ACTIONS.salvarNomeConta = async form => {
   await withBusy(form.querySelector('button[type=submit]'), async () => {
     try {
       const res = await Firebase.salvarNomeConta($('conta-nome-input').value);
-      if (res.atualizouAtual) { STATE.pessoa = res.nome; store.set(K.pessoa, res.nome); $('who-name').textContent = res.nome; }
+      if (res.atualizouAtual) { STATE.pessoa = res.nome; store.set(K.pessoa, res.nome); atualizarTopo(); }
       EDITANDO_CONTA = '';
       showToast(res.conflitos.length
         ? 'Nome salvo, menos em ' + res.conflitos.join(', ') + ': lá já tem alguém com esse nome.'
@@ -2662,7 +2741,7 @@ async function carregarConvitesPendentes() {
 function convitesPendentesHtml(lista) {
   if (!lista.length) return '';
   return `<div class="card convites-card">
-    <h3>📩 ${lista.length > 1 ? 'Convites para você' : 'Convite para você'}</h3>
+    <h3>${lista.length > 1 ? 'Convites para você' : 'Convite para você'}</h3>
     ${lista.map(c => `
       <div class="list-row">
         <div>${h(c.nomeGrupo)}<div class="sub">${c.convidadoPor ? 'Convite de ' + h(c.convidadoPor) : 'Convite por email'}</div></div>
@@ -2958,11 +3037,11 @@ const opcoesCategoria = (selecionada, extra) =>
 
 async function renderMeusGastos() {
   const el = $('tab-gastos');
-  if (!FIN_UI.dados) el.innerHTML = '<div class="spinner">Juntando suas finanças e os seus grupos...</div>';
+  if (!FIN_UI.dados) mostrarCarregando(el, 'saldo', 'Juntando suas finanças e os seus grupos');
   try {
     FIN_UI.dados = await Firebase.financas();
     FIN_CACHE = FIN_UI.dados.fin;
-  } catch (err) { el.innerHTML = `<div class="card"><p class="empty">${h(err.message)}</p></div>`; return; }
+  } catch (err) { if (STATE.currentTab === 'gastos') erroAoCarregar(el, err); return; }
   if (STATE.currentTab !== 'gastos') return;
   desenharFinancas();
 }
@@ -2978,7 +3057,7 @@ function desenharFinancas() {
   const conteudo = { resumo: finResumo, fixos: finFixos, cartoes: finCartoes, previsao: finPrevisao, config: finConfig }[aba];
   const aviso = fin.erro ? `<div class="card fin-aviso"><p class="hint warn" style="margin:0">Suas finanças pessoais não carregaram (${h(fin.erro.message)}).
       Os gastos dos grupos aparecem normalmente.</p></div>` : '';
-  // Renda e cartões é uma tela à parte (abre pelo atalho de Finanças ou pela engrenagem): só o título e o conteúdo
+  // Renda e cartões é uma tela à parte (abre pelo avatar do topo ou pelos atalhos de Finanças): só o título e o conteúdo
   if (aba === 'config') {
     el.innerHTML = `<h2 class="page-title">Renda e cartões</h2>${aviso}<div id="fin-conteudo">${finConfig(ctx)}</div>`;
     return;
@@ -2986,7 +3065,7 @@ function desenharFinancas() {
   el.innerHTML = `
     <div class="fin-topo">
       <h2 class="page-title">Finanças</h2>
-      <button type="button" class="chip" data-action="finAba" data-aba="config">⚙️ Renda e cartões</button>
+      <p class="page-sub">Só você vê. Nada daqui aparece para os seus grupos.</p>
     </div>
     <div class="segmented fin-tabs" role="tablist">${FIN_ABAS.map(([k, n]) =>
       `<button type="button" role="tab" class="${aba === k ? 'active' : ''}" aria-selected="${aba === k}" data-action="finAba" data-aba="${k}">${n}</button>`).join('')}</div>
@@ -3112,7 +3191,7 @@ function acoesItemHtml(i, ctx) {
 }
 function itemHtml(i, ctx, comAcoes = true) {
   return `<div class="hist-item">
-    <div class="top"><span>${i.tipo === 'fixo' ? '🔁 ' : ''}${h(i.descricao)}${i.estimado ? ' <span class="pill est">≈ estimado</span>' : ''}</span><span>${brl(i.valor)}</span></div>
+    <div class="top"><span>${h(i.descricao)}${i.tipo === 'fixo' ? ' <span class="pill">conta fixa</span>' : ''}${i.estimado ? ' <span class="pill est">≈ estimado</span>' : ''}</span><span>${brl(i.valor)}</span></div>
     <div class="sub">${i.data ? h(i.data.slice(8, 10) + '/' + i.data.slice(5, 7)) + ' · ' : ''}${h(deOndeTexto(i, ctx))} · ${h(i.categoria || '—')} · ${h(tipoTexto(i))} ${pillFonte(i)}</div>
     ${comAcoes ? `<div class="fin-acoes">${acoesItemHtml(i, ctx)}</div>` : ''}
   </div>`;
@@ -3215,18 +3294,18 @@ function anoPorMesHtml(itens, P, mesAtual) {
   </div>`;
 }
 function avisoHtml(a, mes) {
-  const linha = (ic, cls, html, acoes = '') => `<div class="insight"><span class="ic ${cls}">${ic}</span><div>${html}${acoes ? `<div class="acoes">${acoes}</div>` : ''}</div></div>`;
+  const linha = (ic, cls, html, acoes = '') => `<div class="insight"><span class="ic ${cls}">${icone(ic)}</span><div>${html}${acoes ? `<div class="acoes">${acoes}</div>` : ''}</div></div>`;
   const mesNome = nomeMesLongo(mes);
-  if (a.tipo === 'confirmar') return linha('✍️', 'acao', `Confirme o valor de <b>${h(a.item.descricao)}</b> em ${h(mesNome)}. A estimativa é <b>${brl(a.item.valor)}</b>, pela média dos últimos meses.`,
+  if (a.tipo === 'confirmar') return linha('lapis', 'acao', `Confirme o valor de <b>${h(a.item.descricao)}</b> em ${h(mesNome)}. A estimativa é <b>${brl(a.item.valor)}</b>, pela média dos últimos meses.`,
     `<button class="link-btn" type="button" data-action="finConfirmar" data-id="${h(a.item.ref.id)}" data-mes="${a.item.mes}" data-valor="${a.item.valor / 100}">Confirmar valor</button>`);
-  if (a.tipo === 'limite') return linha('🚧', 'alerta', `<b>${h(a.categoria)}</b> passou do limite: ${brl(a.valor)} de ${brl(a.limite)} (+${brl(a.valor - a.limite)}).`);
-  if (a.tipo === 'adiantado') return linha('🤝', 'info', `Você pagou <b>${brl(a.valor)}</b> a mais por outras pessoas (${h(a.itens.join(', '))}). Esse valor volta pelos acertos dos grupos e não conta nos seus gastos.`);
-  if (a.tipo === 'beneficio') return linha('🍽️', 'alerta', `<b>${h(a.fonte.nome)}</b>: já usou ${pctDe(a.usado, a.fonte.mensal)}% no dia ${a.dia}. ${a.usado < a.fonte.mensal ? 'Sobram ' + brl(a.fonte.mensal - a.usado) + ' até o fim do mês.' : ''}`);
-  if (a.tipo === 'duplicado') return linha('🔁', 'info', `<b>${h(a.fixo.descricao)}</b> (${brl(a.grupo.valor)}) está nos seus fixos e também no grupo <b>${h(a.grupo.origemNome)}</b>. É a mesma conta?`,
+  if (a.tipo === 'limite') return linha('alerta', 'alerta', `<b>${h(a.categoria)}</b> passou do limite: ${brl(a.valor)} de ${brl(a.limite)} (+${brl(a.valor - a.limite)}).`);
+  if (a.tipo === 'adiantado') return linha('grupo', 'info', `Você pagou <b>${brl(a.valor)}</b> a mais por outras pessoas (${h(a.itens.join(', '))}). Esse valor volta pelos acertos dos grupos e não conta nos seus gastos.`);
+  if (a.tipo === 'beneficio') return linha('alerta', 'alerta', `<b>${h(a.fonte.nome)}</b>: já usou ${pctDe(a.usado, a.fonte.mensal)}% no dia ${a.dia}. ${a.usado < a.fonte.mensal ? 'Sobram ' + brl(a.fonte.mensal - a.usado) + ' até o fim do mês.' : ''}`);
+  if (a.tipo === 'duplicado') return linha('repetir', 'info', `<b>${h(a.fixo.descricao)}</b> (${brl(a.grupo.valor)}) está nos seus fixos e também no grupo <b>${h(a.grupo.origemNome)}</b>. É a mesma conta?`,
     `<button class="link-btn" type="button" data-action="finDuplicado" data-id="${h(a.fixo.id)}" data-resp="mesmo">Contar só a do grupo</button>
      <button class="link-btn" type="button" data-action="finDuplicado" data-id="${h(a.fixo.id)}" data-resp="diferente">São diferentes</button>`);
-  if (a.tipo === 'acabam') return linha('🎉', 'bom', `Última parcela este mês: ${a.itens.map(x => '<b>' + h(x) + '</b>').join(', ')}. Em ${h(nomeMesLongo(addM(mes, 1)))} seu mês fica <b>${brl(a.valor)}</b> mais leve.`);
-  if (a.tipo === 'acima') return linha('📈', 'alerta', `<b>${h(a.categoria)}</b> está ${Math.round((a.valor / a.media - 1) * 100)}% acima da sua média (${brl(a.valor)} × ${brl(a.media)}).`);
+  if (a.tipo === 'acabam') return linha('ok', 'bom', `Última parcela este mês: ${a.itens.map(x => '<b>' + h(x) + '</b>').join(', ')}. Em ${h(nomeMesLongo(addM(mes, 1)))} seu mês fica <b>${brl(a.valor)}</b> mais leve.`);
+  if (a.tipo === 'acima') return linha('subindo', 'alerta', `<b>${h(a.categoria)}</b> está ${Math.round((a.valor / a.media - 1) * 100)}% acima da sua média (${brl(a.valor)} × ${brl(a.media)}).`);
   return '';
 }
 
@@ -3431,7 +3510,7 @@ function finConfig(ctx) {
   return `
     <div class="card">
       <h3>Renda</h3>
-      ${rendas.map(r => `<div class="renda-linha"><span class="ic" style="background:${r.tipo === 'extra' ? 'var(--cat-other)' : 'var(--good)'}">${r.tipo === 'extra' ? '+' : 'R$'}</span>
+      ${rendas.map(r => `<div class="renda-linha"><span class="ic ${r.tipo === 'extra' ? 'extra' : 'renda'}">${r.tipo === 'extra' ? '+' : 'R$'}</span>
         <span class="n">${h(r.descricao)}<small>${r.tipo === 'extra' ? 'só em ' + h(labelMes(r.mes).toLowerCase()) : 'todo mês · dia ' + (r.dia || 1)}</small></span>
         <span class="v">${brl(r.valor)}</span>
         <span class="fin-mini"><button type="button" class="del-btn" data-action="finForm" data-tipo="renda" data-id="${h(r.id)}">Editar</button>
@@ -3914,7 +3993,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 // Só no computador de desenvolvimento: permite testar telas com dados de exemplo pelo console
 if (location.hostname === 'localhost') {
   window.__rachaeDev = { STATE, switchTab, enterApp: nome => { document.body.classList.remove('on-login');
-    $('screen-login').classList.add('hidden'); $('screen-app').classList.remove('hidden'); $('who-name').textContent = nome; } };
+    $('screen-login').classList.add('hidden'); $('screen-app').classList.remove('hidden'); STATE.pessoa = nome; atualizarTopo(); } };
 }
 
 init();
