@@ -3,7 +3,7 @@
 // aqui — o próprio Firestore guarda um cache local no aparelho.
 //
 // Ao publicar uma versão nova do front, aumente CACHE_VERSION.
-const CACHE_VERSION = 'rachae-v41';
+const CACHE_VERSION = 'rachae-v42';
 const APP_SHELL = [
   './',
   'index.html',

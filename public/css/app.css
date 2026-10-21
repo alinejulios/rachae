@@ -344,6 +344,16 @@ nav.tabbar button {
 nav.tabbar button.active { color: var(--tab-active); }
 nav.tabbar button:active { background: var(--surface-2); }
 nav.tabbar svg { width: var(--icon-lg); height: var(--icon-lg); }
+/* Pagar em destaque: ícone branco num círculo azul, um pouco acima da barra */
+nav.tabbar button.tab-destaque { overflow: visible; color: var(--text-primary); }
+nav.tabbar button.tab-destaque.active { color: var(--tab-active); }
+nav.tabbar button.tab-destaque:active { background: none; }
+nav.tabbar .tab-circulo {
+  display: grid; place-items: center; width: 48px; height: 48px; margin: -24px 0 0; border-radius: 50%; /* -24px: ocupa só os 24px de um ícone comum, e os rótulos ficam alinhados */
+  background: var(--btn-primary-bg); color: var(--on-brand); border: 4px solid var(--surface-1);
+}
+nav.tabbar button.tab-destaque:active .tab-circulo { background: var(--btn-primary-bg-pressed); }
+nav.tabbar .tab-circulo svg { width: 22px; height: 22px; }
 
 /* ---------- Cards ---------- */
 .card {
