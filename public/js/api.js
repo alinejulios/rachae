@@ -17,11 +17,12 @@ import {
   sendPasswordResetEmail, signOut, updateProfile, sendEmailVerification,
   GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, linkWithCredential,
   reauthenticateWithPopup, EmailAuthProvider, updatePassword,
-  reauthenticateWithCredential, verifyBeforeUpdateEmail, linkWithPopup, unlink
+  reauthenticateWithCredential, verifyBeforeUpdateEmail, linkWithPopup, unlink, deleteUser
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  doc, getDoc, getDocs, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, writeBatch, serverTimestamp, query, where, deleteField
+  doc, getDoc, getDocs, setDoc, addDoc, deleteDoc, updateDoc, collection, onSnapshot, writeBatch, serverTimestamp, query, where, deleteField,
+  terminate, clearIndexedDbPersistence
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from '../firebase-config.js';
 import { normalizarChave } from './pix.js';
@@ -116,7 +117,7 @@ export const entrar = (email, senha) => tenta(async () => {
   exigirConfig();
   return (await signInWithEmailAndPassword(auth, email.trim(), senha)).user;
 });
-export const criarConta = (nome, email, senha, continuar = location.origin + '/') => tenta(async () => {
+export const criarConta = (nome, email, senha, continuar = location.origin + '/login') => tenta(async () => {
   exigirConfig();
   const { user } = await createUserWithEmailAndPassword(auth, email.trim(), senha);
   // A conta já existe: se gravar o nome falhar, segue (o nome é pedido de novo ao entrar no grupo)
@@ -226,7 +227,7 @@ export function precisaConfirmarEmail(user = usuarioAtual()) {
 }
 export function emailConfirmado(user = usuarioAtual()) { return !!(user && user.emailVerified); }
 /** (Re)envia o link de confirmação; `continuar` = para onde o link volta (ex.: com o código de convite). */
-export const enviarConfirmacaoEmail = (continuar = location.origin + '/') => tenta(async () => {
+export const enviarConfirmacaoEmail = (continuar = location.origin + '/login') => tenta(async () => {
   const u = usuarioAtual();
   if (!u) throw new ApiError('Entre novamente.', 'AUTH');
   await mandarConfirmacao(u, continuar);
@@ -242,7 +243,7 @@ export const recarregarConfirmacao = () => tenta(async () => {
 export const esqueciSenha = email => tenta(async () => {
   exigirConfig();
   // Depois de criar a senha nova, o Firebase mostra o botão "Continuar", que volta para o app
-  await sendPasswordResetEmail(auth, email.trim().toLowerCase(), { url: location.origin + '/' });
+  await sendPasswordResetEmail(auth, email.trim().toLowerCase(), { url: location.origin + '/login' });
 });
 export async function sair() {
   pararEscuta();
@@ -578,6 +579,78 @@ export const excluirGrupoInteiro = () => tenta(async () => {
   const resto = perfil.casas.filter(x => x !== hid);
   await salvarPerfil(u, resto, resto[0] || '');
   CASA = null; DB = null;
+});
+
+// ------------------------------------------------------------------ excluir a conta
+// Pedido pela própria pessoa em Minha conta. Apaga o que é só dela; o que ela lançou nos grupos
+// em que é membro continua lá (entra no saldo das outras pessoas), como no "Sair do grupo".
+// Grupo que ela administra com outras pessoas impede a exclusão: ela decide antes o que fazer com ele.
+
+/** Separa os grupos da pessoa: os que ela administra sozinha, os em que é membro e os que impedem excluir. */
+async function gruposParaExcluirConta(uid) {
+  const { casas } = await lerPerfil(uid);
+  const out = { casas, sozinha: [], membro: [], impedem: [] };
+  for (const hid of casas) {
+    let c;
+    try { c = await getDoc(doc(fs, 'households', hid)); } catch (e) { continue; } // removida do grupo
+    if (!c.exists()) continue;
+    if (c.data().ownerUid !== uid) { out.membro.push(hid); continue; }
+    const membros = await getDocs(collection(fs, 'households', hid, 'membros'));
+    if (membros.docs.some(m => m.id !== uid)) out.impedem.push(c.data().nome || 'Grupo');
+    else out.sozinha.push(hid);
+  }
+  return out;
+}
+/** Nomes dos grupos que a pessoa administra com outras pessoas (impedem excluir a conta). */
+export const gruposQueImpedemExcluir = () => tenta(async () => (await gruposParaExcluirConta(usuarioAtual().uid)).impedem);
+
+/** Grupo em que a pessoa está sozinha: apaga tudo dele, na mesma ordem de excluirGrupoInteiro. */
+async function apagarGrupoSozinha(hid, uid) {
+  await updateDoc(doc(fs, 'households', hid), { excluindo: true });
+  const refs = [];
+  for (const col of ['pagamentos', 'compras', 'despesas', 'grupos']) {
+    (await getDocs(collection(fs, 'households', hid, col))).forEach(d => refs.push(d.ref));
+  }
+  (await getDocs(query(collection(fs, 'convites'), where('householdId', '==', hid)))).forEach(d => refs.push(d.ref));
+  await apagarEmLotes(refs);
+  try { localStorage.removeItem(CONVITE_KEY(hid)); } catch (e) {}
+  await deleteDoc(doc(fs, 'households', hid, 'membros', uid));
+  await deleteDoc(doc(fs, 'households', hid));
+}
+
+export const excluirConta = senhaAtual => tenta(async () => {
+  const u = usuarioAtual();
+  if (!u) throw new ApiError('Entre novamente.', 'AUTH');
+  const grupos = await gruposParaExcluirConta(u.uid);
+  if (grupos.impedem.length) {
+    throw new ApiError('Você administra ' + grupos.impedem.map(n => '"' + n + '"').join(', ') + ', que tem outras pessoas. '
+      + 'Exclua esse grupo em Ajustes do grupo antes de excluir a conta.', 'ADMIN');
+  }
+  // O Firebase só exclui a conta com login recente: confirma antes de apagar qualquer coisa
+  await reautenticar(senhaAtual);
+  pararEscuta();
+  CASA = null; DB = null;
+  // Despesas pessoais dentro dos grupos (só ela lê; vale também para grupos de que já saiu)
+  for (const hid of grupos.casas) {
+    const refs = [];
+    for (const sub of ['despesas', 'compras']) {
+      try { (await getDocs(collection(fs, 'households', hid, 'pessoais', u.uid, sub))).forEach(d => refs.push(d.ref)); } catch (e) {}
+    }
+    await apagarEmLotes(refs);
+  }
+  for (const hid of grupos.membro) await deleteDoc(doc(fs, 'households', hid, 'membros', u.uid)); // leva junto a chave Pix
+  for (const hid of grupos.sozinha) await apagarGrupoSozinha(hid, u.uid);
+  // Finanças pessoais e o perfil
+  const refs = [];
+  for (const col of ['fontes', 'fixos', 'lancamentos', 'rendas', 'vinculos', 'financas']) {
+    (await getDocs(collection(fs, 'users', u.uid, col))).forEach(d => refs.push(d.ref));
+  }
+  refs.push(doc(fs, 'users', u.uid));
+  await apagarEmLotes(refs);
+  await deleteUser(u);
+  // Cópia local do Firestore e preferências deste aparelho
+  try { await terminate(fs); await clearIndexedDbPersistence(fs); } catch (e) {}
+  try { Object.keys(localStorage).filter(k => k.startsWith('rachae_')).forEach(k => localStorage.removeItem(k)); } catch (e) {}
 });
 
 // ------------------------------------------------------------------ dados em tempo real
@@ -1231,7 +1304,7 @@ export const trocarSenha = (senhaAtual, nova) => tenta(async () => {
  * clique (então a pessoa entra de novo com o email novo). Os grupos são atualizados
  * sozinhos no próximo acesso (sincronizarConta).
  */
-export const trocarEmail = (novo, senhaAtual, continuar = location.origin + '/') => tenta(async () => {
+export const trocarEmail = (novo, senhaAtual, continuar = location.origin + '/login') => tenta(async () => {
   const u = usuarioAtual();
   const e = String(novo || '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new ApiError('Digite um email válido.');

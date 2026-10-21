@@ -1,0 +1,33 @@
+body{margin:0;background:#f4f7fc}
+a{color:#2563eb}a:hover{color:#1d4ed8}
+.r-num{font-variant-numeric:tabular-nums}
+.lp-btn{transition:transform 80ms ease, background-color 120ms ease}
+.lp-btn:active{transform:scale(0.98)}
+.lp-btn-primary:hover{background:#1d4ed8 !important;color:#ffffff !important}
+.lp-btn-secondary:hover{color:#1d4ed8 !important}
+.lp-btn-dark:hover{background:#7c9cff !important;color:#0f1218 !important}
+.lp-link{color:#5b6779;text-decoration:none}
+.lp-link:hover{color:#111827}
+.lp-dark a{color:#7c9cff}
+a:focus-visible,button:focus-visible,summary:focus-visible,[role="region"]:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+input:focus-visible{outline:2px solid #2563eb;outline-offset:1px}
+.lp-dark a:focus-visible{outline-color:#5c82ff}
+.lp-band a:focus-visible,.lp-band button:focus-visible{outline-color:#ffffff}
+.lp-form button:focus-visible,.lp-form input:focus-visible,.lp-form a:focus-visible{outline-color:#2563eb}
+details summary{list-style:none;cursor:pointer}
+details summary::-webkit-details-marker{display:none}
+details[open] .lp-chev{transform:rotate(180deg)}
+h1,h2,h3{text-wrap:balance}
+.lp-skip{position:absolute;left:16px;top:-80px;z-index:10;padding:12px 16px;border-radius:12px;background:#111827;color:#ffffff;font-weight:700;text-decoration:none}
+.lp-skip:focus{top:12px;color:#ffffff}
+@media (max-width: 399px){.lp-tagline{display:none}}
+.lp-dif-index{display:none}
+.lp-radio input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.lp-radio:focus-within{outline:2px solid #2563eb;outline-offset:2px}
+@media (min-width: 1024px){.lp-dif-index{display:flex}.lp-dif-dots{display:none !important}}
+@media (max-width: 479px){.lp-hero-ctas a{width:100%}}
+@media (max-width: 399px){.lp-stat{padding:16px !important}.lp-stat-num{font-size:24px !important}.lp-stat-sub{display:none}}
+@media (max-width: 1023px){.lp-nav-links{display:none !important}}
+@media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important}}
+/* Topo no celular: "Entrar" e o botão da lista cabem numa linha */
+@media (max-width: 479px){.lp-cta-topo{padding:0 14px !important;font-size:14px !important;white-space:nowrap}#lp-entrar{padding:0 8px !important}}

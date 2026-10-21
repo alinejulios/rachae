@@ -18,6 +18,7 @@ rules_version = '2';
 //   households/{hid}/compras/{id}
 //   households/{hid}/pagamentos/{id}
 //   households/{hid}/pessoais/{uid}/despesas|compras/{id} → pessoais: SÓ a própria pessoa lê e grava
+//   listaEspera/{email}                  → lista de espera da landing page (só criar; ninguém lê)
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -109,6 +110,24 @@ service cloud.firestore {
       allow read, delete: if signedIn() && uid() == userId
         && colecao in ['fontes', 'fixos', 'lancamentos', 'rendas', 'vinculos', 'financas'];
       allow create, update: if signedIn() && uid() == userId && finOk(colecao, docId, request.resource.data);
+    }
+
+    // ---------------------------------------------------------------- lista de espera (landing page)
+    // Qualquer pessoa, sem login, entra na lista. O ID do documento é o e-mail (minúsculo):
+    // o mesmo e-mail de novo seria um update, que é recusado — nada é sobrescrito.
+    // Ninguém lê pelo app: os cadastros só são vistos no Console do Firebase.
+    match /listaEspera/{email} {
+      allow create: if request.resource.data.keys().hasOnly(['nome', 'sobrenome', 'email', 'usos', 'origem', 'criadoEm'])
+        && request.resource.data.keys().hasAll(['nome', 'sobrenome', 'email', 'criadoEm'])
+        && str(request.resource.data.nome, 1, 60)
+        && str(request.resource.data.sobrenome, 1, 60)
+        && request.resource.data.email == email
+        && str(email, 6, 254) && email.matches('^[^\\s@A-Z]+@[^\\s@A-Z]+[.][^\\s@A-Z]{2,}$')
+        && request.resource.data.get('usos', []) is list && request.resource.data.get('usos', []).size() <= 4
+        && request.resource.data.get('usos', []).toSet().hasOnly(['eu', 'casa', 'casal', 'role'])
+        && request.resource.data.get('origem', '') in ['', 'indicacao', 'redes', 'busca']
+        && request.resource.data.criadoEm == request.time;
+      allow read, update, delete: if false;
     }
 
     // ---------------------------------------------------------------- convites

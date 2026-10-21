@@ -3,10 +3,9 @@
 // aqui — o próprio Firestore guarda um cache local no aparelho.
 //
 // Ao publicar uma versão nova do front, aumente CACHE_VERSION.
-const CACHE_VERSION = 'rachae-v43';
+const CACHE_VERSION = 'rachae-v44';
 const APP_SHELL = [
-  './',
-  'index.html',
+  'app.html', // o app (a raiz do site é a landing page)
   'firebase-config.js',
   'css/app.css',
   'js/api.js',
@@ -64,6 +63,6 @@ self.addEventListener('fetch', event => {
         return res;
       })
       .catch(() => caches.match(req, { ignoreSearch: true })
-        .then(hit => hit || (req.mode === 'navigate' ? caches.match('index.html') : undefined)))
+        .then(hit => hit || (req.mode === 'navigate' ? caches.match('app.html') : undefined)))
   );
 });

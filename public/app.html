@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; frame-src https://rachae-7047f.firebaseapp.com https://accounts.google.com; connect-src 'self' https://www.gstatic.com https://apis.google.com https://www.googleapis.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebaseinstallations.googleapis.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Rachaê</title>
+<meta name="description" content="Divisão de contas em grupo">
+
+<!-- PWA / tela inicial -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#2563EB" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#171b23" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Rachaê">
+<meta name="format-detection" content="telephone=no">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="on-login">
+<div id="app">
+
+  <!-- LOGIN -->
+  <div id="screen-login">
+    <div class="brand-mark">
+      <svg viewBox="32 32 448 448" aria-hidden="true">
+        <path d="M292 96 L168 284 L260 284 L220 416 L344 228 L252 228 Z" fill="#fff"/>
+      </svg>
+    </div>
+    <h1>Rachaê</h1>
+
+    <div id="login-step-loading"><div class="spinner">Carregando...</div></div>
+
+    <!-- Entrar -->
+    <form id="form-entrar" class="login-step hidden" novalidate>
+      <p>Entre com sua conta Google ou com email e senha.</p>
+      <p class="hint ok convite-aviso hidden">Você abriu um convite: ao entrar, você vai direto para o grupo dele
+        (seus outros grupos continuam no Perfil).</p>
+      <button class="google-btn" type="button" data-action="entrarGoogle">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        Continuar com Google</button>
+      <div class="ou"><span>ou</span></div>
+      <label for="entrar-email" class="field-label">Email</label>
+      <input type="email" id="entrar-email" placeholder="seuemail@exemplo.com" autocomplete="username"
+             autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="next">
+      <label for="entrar-senha" class="field-label">Senha</label>
+      <input type="password" id="entrar-senha" autocomplete="current-password" enterkeyhint="go">
+      <button class="primary" type="submit">Entrar</button>
+      <p class="hint" id="entrar-hint" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="irPara" data-step="form-conta">Criar conta</button>
+        <button type="button" class="link-btn" data-action="irPara" data-step="form-senha">Esqueci a senha</button>
+      </div>
+    </form>
+
+    <!-- Criar conta -->
+    <form id="form-conta" class="login-step hidden" novalidate>
+      <p>Crie sua conta. Depois você entra no grupo com o código de convite.</p>
+      <p class="hint ok convite-aviso hidden">Você abriu um convite. Ao criar a conta, já entra no grupo.
+        Já tem conta? Toque em "Já tenho conta" lá embaixo: ao entrar, você vai direto para o grupo do convite.</p>
+      <button class="google-btn" type="button" data-action="entrarGoogle">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        Criar conta com Google</button>
+      <div class="ou"><span>ou</span></div>
+      <label for="conta-nome" class="field-label">Seu nome (como vai aparecer para o grupo)</label>
+      <input type="text" id="conta-nome" maxlength="40" placeholder="Ex.: Aline"
+             autocomplete="given-name" autocapitalize="words" enterkeyhint="next">
+      <label for="conta-email" class="field-label">Email</label>
+      <input type="email" id="conta-email" placeholder="seuemail@exemplo.com" autocomplete="username"
+             autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="next">
+      <label for="conta-senha" class="field-label">Senha</label>
+      <input type="password" id="conta-senha" class="senha-nova" autocomplete="new-password" minlength="8" enterkeyhint="next" aria-describedby="conta-regras">
+      <ul class="senha-regras" id="conta-regras" data-para="conta-senha"></ul>
+      <label for="conta-senha2" class="field-label">Repita a senha</label>
+      <input type="password" id="conta-senha2" class="senha-repetir" autocomplete="new-password" enterkeyhint="next">
+      <label for="conta-convite" class="field-label">Código de convite <span class="opcional">(se você recebeu um)</span></label>
+      <input type="text" id="conta-convite" placeholder="ABCD234567" maxlength="20"
+             autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="go">
+      <button class="primary" type="submit">Criar conta</button>
+      <p class="hint" id="conta-hint" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="irPara" data-step="form-entrar">Já tenho conta</button>
+      </div>
+    </form>
+
+    <!-- Esqueci a senha -->
+    <form id="form-senha" class="login-step hidden" novalidate>
+      <p>Enviamos um link para você criar uma senha nova.</p>
+      <label for="senha-email" class="field-label">Email</label>
+      <input type="email" id="senha-email" placeholder="seuemail@exemplo.com" autocomplete="username"
+             autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="send">
+      <button class="primary" type="submit">Enviar link</button>
+      <p class="hint" id="senha-hint" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="irPara" data-step="form-entrar">Voltar</button>
+      </div>
+    </form>
+
+    <!-- Entrou pelo Google num email que já tinha conta com senha: liga as duas -->
+    <form id="form-vincular" class="login-step hidden" novalidate>
+      <p><strong id="vincular-email"></strong> já tem conta no Rachaê.</p>
+      <p class="hint" style="margin:-12px 0 18px;text-align:center">Digite a senha dessa conta uma vez para ligá-la ao Google.
+        Seus grupos e despesas continuam os mesmos; nas próximas vezes, basta o botão do Google.</p>
+      <label for="vincular-senha" class="field-label">Senha</label>
+      <input type="password" id="vincular-senha" autocomplete="current-password" enterkeyhint="go">
+      <button class="primary" type="submit">Entrar e ligar ao Google</button>
+      <p class="hint" id="vincular-hint" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="irPara" data-step="form-senha">Esqueci a senha</button>
+        <button type="button" class="link-btn" data-action="cancelarVinculo">Voltar</button>
+      </div>
+    </form>
+
+    <!-- Conta sem senha (criada pelo Google): toda conta precisa de uma -->
+    <form id="form-criar-senha" class="login-step hidden" novalidate>
+      <p>Crie uma senha para sua conta.</p>
+      <p class="hint" style="margin:-12px 0 18px;text-align:center">Você continua entrando com o Google;
+        a senha é uma segunda forma de acessar <strong id="criar-senha-email"></strong>.</p>
+      <input type="email" id="criar-senha-usuario" autocomplete="username" hidden>
+      <label for="criar-senha" class="field-label">Senha</label>
+      <input type="password" id="criar-senha" class="senha-nova" autocomplete="new-password" enterkeyhint="next" aria-describedby="criar-regras">
+      <ul class="senha-regras" id="criar-regras" data-para="criar-senha"></ul>
+      <label for="criar-senha2" class="field-label">Repita a senha</label>
+      <input type="password" id="criar-senha2" class="senha-repetir" autocomplete="new-password" enterkeyhint="go">
+      <button class="primary" type="submit">Salvar senha</button>
+      <p class="hint" id="criar-senha-hint" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="logout">Usar outra conta</button>
+      </div>
+    </form>
+
+    <!-- Confirmar email (contas novas) -->
+    <div id="step-verificar" class="login-step hidden">
+      <p>Falta confirmar seu email.</p>
+      <p class="hint" style="margin:-12px 0 18px;text-align:center">Enviamos um link para <strong id="verificar-email"></strong>.
+        Abra o email (confira o spam e a aba Promoções), toque no link e volte aqui.</p>
+      <button class="primary" type="button" data-action="jaConfirmei">Já confirmei</button>
+      <button class="secondary" type="button" data-action="reenviarConfirmacao">Reenviar email</button>
+      <p class="hint" id="verificar-hint" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="logout">Usar outro email</button>
+      </div>
+    </div>
+
+    <!-- Logado, mas ainda sem grupo -->
+    <div id="step-sem-casa" class="login-step hidden">
+      <p>Olá, <strong id="sem-casa-nome"></strong>! Falta entrar num grupo.</p>
+      <div id="sem-casa-convites"></div>
+      <form id="form-convite" novalidate>
+        <label for="convite-codigo" class="field-label">Código de convite</label>
+        <input type="text" id="convite-codigo" placeholder="ABCD234567" maxlength="20"
+               autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="go">
+        <button class="primary" type="submit">Entrar no grupo</button>
+        <p class="hint" id="convite-hint" role="status"></p>
+      </form>
+      <details class="criar-casa">
+        <summary>Quero criar um grupo novo</summary>
+        <form id="form-nova-casa" novalidate>
+          <label for="casa-nome" class="field-label">Nome do grupo</label>
+          <input type="text" id="casa-nome" maxlength="40" placeholder="Ex.: Apê da Rua 7, Viagem Chile" autocapitalize="sentences" enterkeyhint="go">
+          <button class="primary" type="submit">Criar grupo</button>
+          <p class="hint">Você vira administrador(a) e recebe um código para convidar os outros.</p>
+          <p class="hint" id="nova-casa-hint" role="status"></p>
+        </form>
+      </details>
+      <div class="login-links">
+        <button type="button" class="link-btn" data-action="logout">Sair</button>
+      </div>
+    </div>
+
+    <div id="login-error" class="hidden">
+      <p class="hint error" id="login-error-msg"></p>
+      <button class="primary" type="button" data-action="reload">Tentar de novo</button>
+    </div>
+
+    <div id="install-banner" class="install-banner hidden"></div>
+  </div>
+
+  <!-- APP -->
+  <div id="screen-app" class="hidden">
+    <header class="topbar">
+      <button type="button" class="who" data-action="menuTopo" data-menu="grupo" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-topo" aria-label="Grupo aberto: trocar de grupo">
+        <span class="who-badge">
+          <svg viewBox="32 32 448 448" aria-hidden="true">
+            <path d="M292 96 L168 284 L260 284 L220 416 L344 228 L252 228 Z" fill="#fff"/>
+          </svg>
+        </span>
+        <span class="who-text">
+          <span class="who-grupo"><span id="who-casa">Rachaê</span>
+            <svg class="who-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+          <span class="who-sub" id="who-sub"></span>
+        </span>
+      </button>
+      <div class="topbar-right">
+        <button class="icon-btn" type="button" data-action="menuIr" data-ir="casa" aria-label="Ajustes do grupo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+        <button class="icon-btn" type="button" data-action="menuTopo" data-menu="conta" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-topo" aria-label="Minha conta, renda e cartões">
+          <span class="avatar" id="who-avatar" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div id="menu-topo" class="menu-topo hidden" role="menu"></div>
+    </header>
+
+    <main>
+      <div id="voltar-bar" class="hidden"></div>
+      <div id="conjunto-bar" class="hidden"></div>
+      <section id="tab-dashboard"></section>
+      <section id="tab-despesa" class="hidden"></section>
+      <section id="tab-pagamento" class="hidden"></section>
+      <section id="tab-historico" class="hidden"></section>
+      <section id="tab-casa" class="hidden"></section>
+      <section id="tab-grupos" class="hidden"></section>
+      <section id="tab-gastos" class="hidden"></section>
+      <section id="tab-conta" class="hidden"></section>
+    </main>
+
+    <nav class="tabbar" aria-label="Navegação">
+      <button type="button" data-tab="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5 12 4l8 7.5"/><path d="M6.5 10v9a1 1 0 0 0 1 1H10v-6h4v6h2.5a1 1 0 0 0 1-1v-9"/></svg>
+        Início
+      </button>
+      <button type="button" data-tab="despesa">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+        Nova
+      </button>
+      <button type="button" data-tab="pagamento" class="tab-destaque">
+        <span class="tab-circulo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="3"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9v.01M18 9v.01M6 15v.01M18 15v.01"/></svg></span>
+        Pagar
+      </button>
+      <button type="button" data-tab="historico">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+        Histórico
+      </button>
+      <button type="button" data-tab="gastos">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H18v3"/><rect x="3" y="7.5" width="18" height="12" rx="2.5"/><path d="M16.5 13.5h.01"/></svg>
+        Finanças
+      </button>
+    </nav>
+  </div>
+
+  <div id="offline-bar" class="offline-bar hidden" role="status">Sem internet — os dados podem estar desatualizados</div>
+  <div id="toast" role="status" aria-live="polite"></div>
+</div>
+
+<script src="/vendor/chart.umd.min.js" defer></script>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

@@ -16,11 +16,26 @@ PUBLIC = Path(__file__).resolve().parent.parent / "public"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", 5173))
 
 
+# Mesmas rotas do vercel.json: a raiz é a landing page; as telas do app abrem app.html
+ROTAS_APP = {"/login", "/sign-up", "/home", "/nova", "/pagar", "/historico", "/financas",
+             "/financas/fixos", "/financas/cartoes", "/financas/previsao", "/financas/grupos", "/financas/renda-e-cartoes",
+             "/ajustes-do-grupo", "/meus-grupos", "/minha-conta"}
+ROTAS_PAGINA = {"/politica-de-privacidade": "/politica-de-privacidade.html"}
+
+
 class Handler(SimpleHTTPRequestHandler):
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".js": "text/javascript", ".webmanifest": "application/manifest+json"}
 
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=str(PUBLIC), **kw)
+
+    def translate_path(self, path):
+        caminho = path.split("?", 1)[0].split("#", 1)[0]
+        if caminho in ROTAS_APP:
+            path = "/app.html"
+        elif caminho in ROTAS_PAGINA:
+            path = ROTAS_PAGINA[caminho]
+        return super().translate_path(path)
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")

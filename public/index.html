@@ -2,257 +2,467 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; frame-src https://rachae-7047f.firebaseapp.com https://accounts.google.com; connect-src 'self' https://www.gstatic.com https://apis.google.com https://www.googleapis.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebaseinstallations.googleapis.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://www.gstatic.com https://firestore.googleapis.com; manifest-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<title>Rachaê</title>
-<meta name="description" content="Divisão de contas em grupo">
-
-<!-- PWA / tela inicial -->
-<link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#2563EB" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#171b23" media="(prefers-color-scheme: dark)">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Rachaê">
-<meta name="format-detection" content="telephone=no">
-<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-<link rel="icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-
+<title>Rachaê: controle de gastos e contas divididas</title>
+<meta name="description" content="Veja as suas contas, as da casa e as divididas com a turma num lugar só. Saiba o que vence e quanto vai sobrar no fim do mês.">
+<meta name="theme-color" content="#2563EB">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<!-- Links antigos de convite (/?convite=) e o app instalado na tela inicial vão direto para o app -->
+<script src="/lp/redirecionar.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&family=Inter:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="/lp/lp.css">
 </head>
-<body class="on-login">
-<div id="app">
+<body>
+<div style="font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color: #111827; background: #f4f7fc; font-size: 15px; line-height: 1.5">
+  <a class="lp-skip" href="#conteudo">Pular para o conteúdo</a>
 
-  <!-- LOGIN -->
-  <div id="screen-login">
-    <div class="brand-mark">
-      <svg viewBox="32 32 448 448" aria-hidden="true">
-        <path d="M292 96 L168 284 L260 284 L220 416 L344 228 L252 228 Z" fill="#fff"/>
-      </svg>
-    </div>
-    <h1>Rachaê</h1>
-
-    <div id="login-step-loading"><div class="spinner">Carregando...</div></div>
-
-    <!-- Entrar -->
-    <form id="form-entrar" class="login-step hidden" novalidate>
-      <p>Entre com sua conta Google ou com email e senha.</p>
-      <p class="hint ok convite-aviso hidden">Você abriu um convite: ao entrar, você vai direto para o grupo dele
-        (seus outros grupos continuam no Perfil).</p>
-      <button class="google-btn" type="button" data-action="entrarGoogle">
-        <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-        Continuar com Google</button>
-      <div class="ou"><span>ou</span></div>
-      <label for="entrar-email" class="field-label">Email</label>
-      <input type="email" id="entrar-email" placeholder="seuemail@exemplo.com" autocomplete="username"
-             autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="next">
-      <label for="entrar-senha" class="field-label">Senha</label>
-      <input type="password" id="entrar-senha" autocomplete="current-password" enterkeyhint="go">
-      <button class="primary" type="submit">Entrar</button>
-      <p class="hint" id="entrar-hint" role="status"></p>
-      <div class="login-links">
-        <button type="button" class="link-btn" data-action="irPara" data-step="form-conta">Criar conta</button>
-        <button type="button" class="link-btn" data-action="irPara" data-step="form-senha">Esqueci a senha</button>
-      </div>
-    </form>
-
-    <!-- Criar conta -->
-    <form id="form-conta" class="login-step hidden" novalidate>
-      <p>Crie sua conta. Depois você entra no grupo com o código de convite.</p>
-      <p class="hint ok convite-aviso hidden">Você abriu um convite. Ao criar a conta, já entra no grupo.
-        Já tem conta? Toque em "Já tenho conta" lá embaixo: ao entrar, você vai direto para o grupo do convite.</p>
-      <button class="google-btn" type="button" data-action="entrarGoogle">
-        <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-        Criar conta com Google</button>
-      <div class="ou"><span>ou</span></div>
-      <label for="conta-nome" class="field-label">Seu nome (como vai aparecer para o grupo)</label>
-      <input type="text" id="conta-nome" maxlength="40" placeholder="Ex.: Aline"
-             autocomplete="given-name" autocapitalize="words" enterkeyhint="next">
-      <label for="conta-email" class="field-label">Email</label>
-      <input type="email" id="conta-email" placeholder="seuemail@exemplo.com" autocomplete="username"
-             autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="next">
-      <label for="conta-senha" class="field-label">Senha</label>
-      <input type="password" id="conta-senha" class="senha-nova" autocomplete="new-password" minlength="8" enterkeyhint="next" aria-describedby="conta-regras">
-      <ul class="senha-regras" id="conta-regras" data-para="conta-senha"></ul>
-      <label for="conta-senha2" class="field-label">Repita a senha</label>
-      <input type="password" id="conta-senha2" class="senha-repetir" autocomplete="new-password" enterkeyhint="next">
-      <label for="conta-convite" class="field-label">Código de convite <span class="opcional">(se você recebeu um)</span></label>
-      <input type="text" id="conta-convite" placeholder="ABCD234567" maxlength="20"
-             autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="go">
-      <button class="primary" type="submit">Criar conta</button>
-      <p class="hint" id="conta-hint" role="status"></p>
-      <div class="login-links">
-        <button type="button" class="link-btn" data-action="irPara" data-step="form-entrar">Já tenho conta</button>
-      </div>
-    </form>
-
-    <!-- Esqueci a senha -->
-    <form id="form-senha" class="login-step hidden" novalidate>
-      <p>Enviamos um link para você criar uma senha nova.</p>
-      <label for="senha-email" class="field-label">Email</label>
-      <input type="email" id="senha-email" placeholder="seuemail@exemplo.com" autocomplete="username"
-             autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email" enterkeyhint="send">
-      <button class="primary" type="submit">Enviar link</button>
-      <p class="hint" id="senha-hint" role="status"></p>
-      <div class="login-links">
-        <button type="button" class="link-btn" data-action="irPara" data-step="form-entrar">Voltar</button>
-      </div>
-    </form>
-
-    <!-- Entrou pelo Google num email que já tinha conta com senha: liga as duas -->
-    <form id="form-vincular" class="login-step hidden" novalidate>
-      <p><strong id="vincular-email"></strong> já tem conta no Rachaê.</p>
-      <p class="hint" style="margin:-12px 0 18px;text-align:center">Digite a senha dessa conta uma vez para ligá-la ao Google.
-        Seus grupos e despesas continuam os mesmos; nas próximas vezes, basta o botão do Google.</p>
-      <label for="vincular-senha" class="field-label">Senha</label>
-      <input type="password" id="vincular-senha" autocomplete="current-password" enterkeyhint="go">
-      <button class="primary" type="submit">Entrar e ligar ao Google</button>
-      <p class="hint" id="vincular-hint" role="status"></p>
-      <div class="login-links">
-        <button type="button" class="link-btn" data-action="irPara" data-step="form-senha">Esqueci a senha</button>
-        <button type="button" class="link-btn" data-action="cancelarVinculo">Voltar</button>
-      </div>
-    </form>
-
-    <!-- Conta sem senha (criada pelo Google): toda conta precisa de uma -->
-    <form id="form-criar-senha" class="login-step hidden" novalidate>
-      <p>Crie uma senha para sua conta.</p>
-      <p class="hint" style="margin:-12px 0 18px;text-align:center">Você continua entrando com o Google;
-        a senha é uma segunda forma de acessar <strong id="criar-senha-email"></strong>.</p>
-      <input type="email" id="criar-senha-usuario" autocomplete="username" hidden>
-      <label for="criar-senha" class="field-label">Senha</label>
-      <input type="password" id="criar-senha" class="senha-nova" autocomplete="new-password" enterkeyhint="next" aria-describedby="criar-regras">
-      <ul class="senha-regras" id="criar-regras" data-para="criar-senha"></ul>
-      <label for="criar-senha2" class="field-label">Repita a senha</label>
-      <input type="password" id="criar-senha2" class="senha-repetir" autocomplete="new-password" enterkeyhint="go">
-      <button class="primary" type="submit">Salvar senha</button>
-      <p class="hint" id="criar-senha-hint" role="status"></p>
-      <div class="login-links">
-        <button type="button" class="link-btn" data-action="logout">Usar outra conta</button>
-      </div>
-    </form>
-
-    <!-- Confirmar email (contas novas) -->
-    <div id="step-verificar" class="login-step hidden">
-      <p>Falta confirmar seu email.</p>
-      <p class="hint" style="margin:-12px 0 18px;text-align:center">Enviamos um link para <strong id="verificar-email"></strong>.
-        Abra o email (confira o spam e a aba Promoções), toque no link e volte aqui.</p>
-      <button class="primary" type="button" data-action="jaConfirmei">Já confirmei</button>
-      <button class="secondary" type="button" data-action="reenviarConfirmacao">Reenviar email</button>
-      <p class="hint" id="verificar-hint" role="status"></p>
-      <div class="login-links">
-        <button type="button" class="link-btn" data-action="logout">Usar outro email</button>
-      </div>
-    </div>
-
-    <!-- Logado, mas ainda sem grupo -->
-    <div id="step-sem-casa" class="login-step hidden">
-      <p>Olá, <strong id="sem-casa-nome"></strong>! Falta entrar num grupo.</p>
-      <div id="sem-casa-convites"></div>
-      <form id="form-convite" novalidate>
-        <label for="convite-codigo" class="field-label">Código de convite</label>
-        <input type="text" id="convite-codigo" placeholder="ABCD234567" maxlength="20"
-               autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="go">
-        <button class="primary" type="submit">Entrar no grupo</button>
-        <p class="hint" id="convite-hint" role="status"></p>
-      </form>
-      <details class="criar-casa">
-        <summary>Quero criar um grupo novo</summary>
-        <form id="form-nova-casa" novalidate>
-          <label for="casa-nome" class="field-label">Nome do grupo</label>
-          <input type="text" id="casa-nome" maxlength="40" placeholder="Ex.: Apê da Rua 7, Viagem Chile" autocapitalize="sentences" enterkeyhint="go">
-          <button class="primary" type="submit">Criar grupo</button>
-          <p class="hint">Você vira administrador(a) e recebe um código para convidar os outros.</p>
-          <p class="hint" id="nova-casa-hint" role="status"></p>
-        </form>
-      </details>
-      <div class="login-links">
-        <button type="button" class="link-btn" data-action="logout">Sair</button>
-      </div>
-    </div>
-
-    <div id="login-error" class="hidden">
-      <p class="hint error" id="login-error-msg"></p>
-      <button class="primary" type="button" data-action="reload">Tentar de novo</button>
-    </div>
-
-    <div id="install-banner" class="install-banner hidden"></div>
-  </div>
-
-  <!-- APP -->
-  <div id="screen-app" class="hidden">
-    <header class="topbar">
-      <button type="button" class="who" data-action="menuTopo" data-menu="grupo" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-topo" aria-label="Grupo aberto: trocar de grupo">
-        <span class="who-badge">
-          <svg viewBox="32 32 448 448" aria-hidden="true">
-            <path d="M292 96 L168 284 L260 284 L220 416 L344 228 L252 228 Z" fill="#fff"/>
-          </svg>
+  <!-- Topo -->
+  <header style="background: #ffffff; border-bottom: 1px solid rgba(20,40,80,0.10)">
+    <nav aria-label="Principal" style="max-width: 1200px; margin: 0 auto; padding: 12px clamp(16px, 4vw, 32px); display: flex; align-items: center; justify-content: space-between; gap: 16px">
+      <a href="#topo" style="display: flex; align-items: center; gap: 10px; text-decoration: none; color: #111827; min-height: 44px">
+        <svg aria-hidden="true" width="36" height="36" viewBox="10 10 60 60" style="flex: none; display: block"><defs><linearGradient id="rb-grad-nav" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00D2FF"></stop><stop offset="50%" stop-color="#2563EB"></stop><stop offset="100%" stop-color="#5C82FF"></stop></linearGradient></defs><rect x="10" y="10" width="60" height="60" rx="16" fill="url(#rb-grad-nav)"></rect><path d="M45 18 L28 42 L41 42 L35 62 L52 38 L39 38 Z" fill="#FFFFFF"></path></svg>
+        <span style="display: flex; flex-direction: column; line-height: 1.15">
+          <span style="font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: 20px; letter-spacing: -0.02em">Rachaê</span>
+          <span class="lp-tagline" style="margin-top: 2px; font-size: 12.5px; color: #5b6779">Aqui a conta fecha</span>
         </span>
-        <span class="who-text">
-          <span class="who-grupo"><span id="who-casa">Rachaê</span>
-            <svg class="who-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
-          <span class="who-sub" id="who-sub"></span>
-        </span>
-      </button>
-      <div class="topbar-right">
-        <button class="icon-btn" type="button" data-action="menuIr" data-ir="casa" aria-label="Ajustes do grupo">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-        </button>
-        <button class="icon-btn" type="button" data-action="menuTopo" data-menu="conta" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-topo" aria-label="Minha conta, renda e cartões">
-          <span class="avatar" id="who-avatar" aria-hidden="true"></span>
-        </button>
+      </a>
+      <div class="lp-nav-links" style="display: flex; align-items: center; gap: 32px">
+        <a class="lp-link" href="#para-quem" style="font-weight: 600">Para quem</a>
+        <a class="lp-link" href="#visao-do-mes" style="font-weight: 600">Visão do mês</a>
+        <a class="lp-link" href="#diferenciais" style="font-weight: 600">Diferenciais</a>
+        <a class="lp-link" href="#perguntas" style="font-weight: 600">Perguntas</a>
       </div>
-      <div id="menu-topo" class="menu-topo hidden" role="menu"></div>
-    </header>
-
-    <main>
-      <div id="voltar-bar" class="hidden"></div>
-      <div id="conjunto-bar" class="hidden"></div>
-      <section id="tab-dashboard"></section>
-      <section id="tab-despesa" class="hidden"></section>
-      <section id="tab-pagamento" class="hidden"></section>
-      <section id="tab-historico" class="hidden"></section>
-      <section id="tab-casa" class="hidden"></section>
-      <section id="tab-grupos" class="hidden"></section>
-      <section id="tab-gastos" class="hidden"></section>
-      <section id="tab-conta" class="hidden"></section>
-    </main>
-
-    <nav class="tabbar" aria-label="Navegação">
-      <button type="button" data-tab="dashboard">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5 12 4l8 7.5"/><path d="M6.5 10v9a1 1 0 0 0 1 1H10v-6h4v6h2.5a1 1 0 0 0 1-1v-9"/></svg>
-        Início
-      </button>
-      <button type="button" data-tab="despesa">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
-        Nova
-      </button>
-      <button type="button" data-tab="pagamento" class="tab-destaque">
-        <span class="tab-circulo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="3"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9v.01M18 9v.01M6 15v.01M18 15v.01"/></svg></span>
-        Pagar
-      </button>
-      <button type="button" data-tab="historico">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
-        Histórico
-      </button>
-      <button type="button" data-tab="gastos">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H18v3"/><rect x="3" y="7.5" width="18" height="12" rx="2.5"/><path d="M16.5 13.5h.01"/></svg>
-        Finanças
-      </button>
+      <div style="display: flex; align-items: center; gap: 8px">
+        <a id="lp-entrar" class="lp-link" href="/login" style="display: inline-flex; align-items: center; min-height: 46px; padding: 0 12px; font-weight: 700">Entrar</a>
+        <a class="lp-btn lp-btn-primary lp-cta-topo" href="#lista-de-espera" data-evento="cta_topo" style="display: inline-flex; align-items: center; justify-content: center; min-height: 46px; padding: 0 20px; border-radius: 12px; background: #2563eb; color: #ffffff; text-decoration: none; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 15px">Entrar na lista</a>
+      </div>
     </nav>
-  </div>
+  </header>
 
-  <div id="offline-bar" class="offline-bar hidden" role="status">Sem internet — os dados podem estar desatualizados</div>
-  <div id="toast" role="status" aria-live="polite"></div>
+<main id="conteudo">
+
+  <!-- Hero -->
+  <section id="topo" aria-labelledby="hero-t" style="max-width: 1200px; margin: 0 auto; padding: clamp(48px, 7vw, 96px) clamp(16px, 4vw, 32px); display: flex; flex-wrap: wrap; align-items: center; gap: clamp(32px, 5vw, 64px)">
+    <div style="flex: 1 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 24px">
+      <span style="align-self: flex-start; display: inline-flex; align-items: center; min-height: 28px; padding: 0 12px; border-radius: 999px; background: #e8efff; color: #1d4ed8; font-size: 12px; font-weight: 700">um novo jeito de olhar para o dinheiro</span>
+      <h1 id="hero-t" style="margin: 0; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: clamp(40px, 5.6vw, 64px); line-height: 1.05; letter-spacing: -0.03em; color: #111827">Suas contas à vista e o fim do mês sem susto</h1>
+      <p style="margin: 0; max-width: 540px; font-size: clamp(17px, 1.6vw, 19px); line-height: 1.55; color: #5b6779">O Rachaê junta as contas do dia a dia num lugar só: as suas, as da casa e as que você divide com a turma. Você sabe o que vence, quanto é a sua parte e quanto vai sobrar.</p>
+      <div class="lp-hero-ctas" style="display: flex; flex-wrap: wrap; gap: 12px">
+        <a class="lp-btn lp-btn-primary" href="#lista-de-espera" data-evento="cta_hero" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 50px; padding: 0 24px; border-radius: 12px; background: #2563eb; color: #ffffff; text-decoration: none; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 17px">Entrar na lista de espera
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>
+        </a>
+        <a class="lp-btn lp-btn-secondary" href="#como-funciona" style="display: inline-flex; align-items: center; justify-content: center; min-height: 50px; padding: 0 24px; border-radius: 12px; background: #e8efff; color: #1d4ed8; text-decoration: none; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 17px">Ver como funciona</a>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; color: #687282; font-size: 13.5px">
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><rect x="6" y="2" width="12" height="20" rx="2"></rect><path d="M12 18h.01"></path></svg>
+        <span>Gratuito e em versão beta: abre no navegador do celular, sem loja de apps.</span>
+      </div>
+    </div>
+
+    <!-- Telas reais do app: claro na frente, escuro atrás -->
+    <div style="flex: 1 1 360px; min-width: 0; display: flex; justify-content: center">
+      <div style="position: relative; width: 440px; max-width: 100%">
+        <div aria-hidden="true" style="position: absolute; top: 96px; bottom: -24px; left: 0; right: 0; border-radius: 16px; background: #e8efff"></div>
+        <div style="position: absolute; top: 0; right: 0; width: 56%; box-sizing: border-box; padding: 8px; border-radius: 36px; background: #111827">
+          <img src="/lp/assets/8f3d3bb8c8b3805c1fa3219993b9873b.webp" srcset="/lp/assets/9cacc1ffb8ddff5016ad37638f5a45a9.webp 300w, /lp/assets/8f3d3bb8c8b3805c1fa3219993b9873b.webp 600w" sizes="(max-width: 480px) 56vw, 250px" width="600" height="1298" decoding="async" alt="" style="display: block; width: 100%; height: auto; border-radius: 28px">
+        </div>
+        <div style="position: relative; margin: 64px 0 0 4%; width: 62%; box-sizing: border-box; padding: 10px; border-radius: 42px; background: #111827">
+          <img src="/lp/assets/233e12ae47909ef39beb7f7322c4ea92.webp" srcset="/lp/assets/01d8456f1f91f7309fba34e50e5033d0.webp 300w, /lp/assets/233e12ae47909ef39beb7f7322c4ea92.webp 600w" sizes="(max-width: 480px) 62vw, 280px" width="600" height="1298" fetchpriority="high" alt="Tela Início do Rachaê no grupo Apê da Rua 7: em outubro de 2026 você tem R$ 312,40 a receber, com o saldo de cada pessoa e quem paga quem" style="display: block; width: 100%; height: auto; border-radius: 32px">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Para quem: seletor -->
+  <section id="para-quem" aria-labelledby="para-quem-t" style="background: #ffffff; border-top: 1px solid rgba(20,40,80,0.10)">
+    <div style="max-width: 1200px; margin: 0 auto; padding: clamp(48px, 7vw, 96px) clamp(16px, 4vw, 32px); display: flex; flex-direction: column; gap: 32px">
+      <div style="display: flex; flex-direction: column; gap: 12px; max-width: 680px">
+        <h2 id="para-quem-t" style="margin: 0; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: clamp(32px, 3.4vw, 40px); line-height: 1.15; letter-spacing: -0.02em">Para as contas que são só suas e as que são de todo mundo</h2>
+        <p style="margin: 0; font-size: 17px; color: #5b6779">Use para as suas contas, para a casa ou para uma viagem. O Rachaê se adapta à forma como você organiza o dinheiro.</p>
+      </div>
+
+      <div id="pq-modos" role="group" aria-label="Escolha como você usaria" style="align-self: flex-start; width: 100%; max-width: 560px; box-sizing: border-box; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 12px; background: #f4f7fc; border: 1px solid #8b95a5">
+      </div>
+
+      <div id="pq-painel" aria-live="polite" style="display: flex; flex-wrap: wrap; border: 1px solid rgba(20,40,80,0.10); border-radius: 16px; overflow: hidden"></div>
+    </div>
+  </section>
+
+  <!-- Visão do mês: seção de destaque (tema escuro do app) -->
+  <section id="visao-do-mes" class="lp-dark" aria-labelledby="visao-t" style="background: #0f1218; color: #f5f7fb">
+    <div style="max-width: 1200px; margin: 0 auto; padding: clamp(64px, 8vw, 96px) clamp(16px, 4vw, 32px); display: flex; flex-direction: column; gap: 32px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 32px">
+        <div style="flex: 1 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+          <span style="align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 12px; border-radius: 999px; background: #1c2a4f; color: #7c9cff; font-size: 12px; font-weight: 700">
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+            visão do mês
+          </span>
+          <h2 id="visao-t" style="margin: 0; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: clamp(32px, 4vw, 48px); line-height: 1.1; letter-spacing: -0.03em; color: #f5f7fb">Saiba hoje como vai ser o seu fim de mês</h2>
+          <p style="margin: 0; max-width: 600px; font-size: clamp(17px, 1.6vw, 19px); color: #b7c0d1">O Rachaê soma o que você ganha, o que já está no cartão e a sua parte nas contas divididas. No fim, sobra uma conta simples: quanto fica com você.</p>
+        </div>
+        <a class="lp-btn lp-btn-dark" href="#lista-de-espera" data-evento="cta_visao" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 50px; padding: 0 24px; border-radius: 12px; background: #5c82ff; color: #0f1218; text-decoration: none; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 17px">Quero usar quando abrir
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>
+        </a>
+      </div>
+
+      <div role="img" aria-label="Exemplo da visão de outubro: entram R$ 4.000,00, a fatura é de R$ 2.170,50 e a sobra estimada é de R$ 1.829,50, com gastos por cartão e por categoria" style="display: flex; flex-direction: column; gap: 14px">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 14px">
+          <div class="lp-stat" style="background: #171b23; border: 1px solid rgba(255,255,255,0.10); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+            <div style="display: flex; align-items: center; gap: 8px; color: #b7c0d1; font-size: 13px; font-weight: 700">
+              <span aria-hidden="true" style="width: 28px; height: 28px; border-radius: 8px; background: #10332a; color: #34d399; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700">R$</span>
+              Entra em outubro
+            </div>
+            <span class="r-num lp-stat-num" style="font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 30px; line-height: 1.2">R$ 4.000,00</span>
+            <span class="lp-stat-sub" style="font-size: 13px; color: #838da0">salário</span>
+          </div>
+          <div class="lp-stat" style="background: #171b23; border: 1px solid rgba(255,255,255,0.10); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+            <div style="display: flex; align-items: center; gap: 8px; color: #b7c0d1; font-size: 13px; font-weight: 700">
+              <span aria-hidden="true" style="width: 28px; height: 28px; border-radius: 8px; background: #1c2a4f; color: #7c9cff; display: flex; align-items: center; justify-content: center">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><path d="M2 10h20"></path></svg>
+              </span>
+              Fatura de outubro
+            </div>
+            <span class="r-num lp-stat-num" style="font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 30px; line-height: 1.2">R$ 2.170,50</span>
+            <span style="align-self: flex-start; padding: 2px 8px; border-radius: 999px; background: #1c2a4f; color: #7c9cff; font-size: 11px; font-weight: 700">vence dia 10</span>
+          </div>
+          <div class="lp-stat" style="background: #171b23; border: 1px solid rgba(255,255,255,0.10); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 6px">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+              <span style="display: flex; align-items: center; gap: 8px; color: #b7c0d1; font-size: 13px; font-weight: 700">
+                <span aria-hidden="true" style="width: 28px; height: 28px; border-radius: 8px; background: #10332a; color: #34d399; display: flex; align-items: center; justify-content: center">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>
+                </span>
+                Sobra do salário
+              </span>
+              <span style="padding: 2px 8px; border-radius: 999px; background: #0f3240; color: #33dbff; font-size: 11px; font-weight: 700">estimado</span>
+            </div>
+            <span class="r-num lp-stat-num" style="font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 30px; line-height: 1.2; color: #34d399">+R$ 1.829,50</span>
+            <span class="lp-stat-sub" style="font-size: 13px; color: #838da0">com tudo o que ainda vence no mês</span>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 14px">
+          <div style="background: #171b23; border: 1px solid rgba(255,255,255,0.10); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 16px">
+            <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px">
+              <span style="font-size: 15px; font-weight: 700; color: #b7c0d1">Gastos por cartão</span>
+              <span style="font-size: 12px; color: #838da0">cada cartão na cor do banco</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px">
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 13.5px"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 4px; background: #a64ae6"></span>Cartão roxo</span><span class="r-num" style="font-weight: 700">R$ 1.240,00</span></div>
+              <div style="height: 10px; border-radius: 4px; background: #262c38; overflow: hidden"><div style="width: 57%; height: 100%; border-radius: 4px; background: #a64ae6"></div></div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px">
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 13.5px"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 4px; background: #ec7000"></span>Cartão laranja</span><span class="r-num" style="font-weight: 700">R$ 620,50</span></div>
+              <div style="height: 10px; border-radius: 4px; background: #262c38; overflow: hidden"><div style="width: 29%; height: 100%; border-radius: 4px; background: #ec7000"></div></div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px">
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 13.5px"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 4px; background: #22c3e6"></span>Cartão azul</span><span class="r-num" style="font-weight: 700">R$ 310,00</span></div>
+              <div style="height: 10px; border-radius: 4px; background: #262c38; overflow: hidden"><div style="width: 14%; height: 100%; border-radius: 4px; background: #22c3e6"></div></div>
+            </div>
+          </div>
+
+          <div style="background: #171b23; border: 1px solid rgba(255,255,255,0.10); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 16px">
+            <span style="font-size: 15px; font-weight: 700; color: #b7c0d1">Para onde foi o dinheiro</span>
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 24px">
+              <div style="position: relative; width: 160px; height: 160px; flex: none; border-radius: 999px; background: conic-gradient(#3987e5 0 38%, #d95926 38% 62%, #199e70 62% 76%, #c98500 76% 88%, #6b7484 88% 100%)">
+                <div style="position: absolute; inset: 24px; border-radius: 999px; background: #171b23; display: flex; flex-direction: column; align-items: center; justify-content: center">
+                  <span class="r-num" style="font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 16px">R$ 2.170,50</span>
+                  <span style="font-size: 12px; color: #838da0">em outubro</span>
+                </div>
+              </div>
+              <div style="flex: 1 1 160px; min-width: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px">
+                <div style="display: flex; justify-content: space-between; gap: 8px"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 4px; background: #3987e5"></span>Mercado</span><span class="r-num" style="color: #b7c0d1">38%</span></div>
+                <div style="display: flex; justify-content: space-between; gap: 8px"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 4px; background: #d95926"></span>Restaurantes</span><span class="r-num" style="color: #b7c0d1">24%</span></div>
+                <div style="display: flex; justify-content: space-between; gap: 8px"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 4px; background: #199e70"></span>Transporte</span><span class="r-num" style="color: #b7c0d1">14%</span></div>
+                <div style="display: flex; justify-content: space-between; gap: 8px"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 4px; background: #c98500"></span>Lazer</span><span class="r-num" style="color: #b7c0d1">12%</span></div>
+                <div style="display: flex; justify-content: space-between; gap: 8px"><span style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 4px; background: #6b7484"></span>outros</span><span class="r-num" style="color: #b7c0d1">12%</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 24px; border-top: 1px solid #262c38">
+        <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 24px">
+          <h3 style="margin: 0; font-size: 17px; font-weight: 700; color: #f5f7fb">Tudo na mesma tela</h3>
+          <p style="margin: 0; color: #b7c0d1">As suas contas, as da casa e as divididas com a turma aparecem juntas. A sua parte entra automaticamente no cálculo.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 24px">
+          <h3 style="margin: 0; font-size: 17px; font-weight: 700; color: #f5f7fb">Fatura sem surpresa</h3>
+          <p style="margin: 0; color: #b7c0d1">Compras parceladas caem no mês certo. Você vê a fatura de novembro antes de ela chegar.</p>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 24px">
+          <h3 style="margin: 0; font-size: 17px; font-weight: 700; color: #f5f7fb">Previsão da sobra</h3>
+          <p style="margin: 0; color: #b7c0d1">Com o que entra e o que ainda vence, você sabe quanto deve sobrar e decide com calma.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Como funciona -->
+  <section id="como-funciona" aria-labelledby="como-t" style="max-width: 1200px; margin: 0 auto; padding: clamp(64px, 8vw, 96px) clamp(16px, 4vw, 32px); display: flex; flex-direction: column; gap: 32px">
+    <div style="display: flex; flex-direction: column; gap: 12px; max-width: 640px">
+      <span style="align-self: flex-start; display: inline-flex; align-items: center; min-height: 28px; padding: 0 12px; border-radius: 999px; background: #e8efff; color: #1d4ed8; font-size: 12px; font-weight: 700">como funciona</span>
+      <h2 id="como-t" style="margin: 0; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: clamp(32px, 3.4vw, 40px); line-height: 1.15; letter-spacing: -0.02em">Como vai funcionar</h2>
+      <p style="margin: 0; font-size: 17px; color: #5b6779">Você cadastra o básico e o seu mês aparece na tela.</p>
+    </div>
+    <ol style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 16px">
+      <li style="background: #ffffff; border: 1px solid rgba(20,40,80,0.10); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+        <span style="width: 36px; height: 36px; border-radius: 999px; background: #2563eb; color: #ffffff; display: flex; align-items: center; justify-content: center; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: 16px">1</span>
+        <h3 style="margin: 0; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 20px">Conte o que entra e o que sai</h3>
+        <p style="margin: 0; color: #5b6779">Cadastre a sua renda, os seus cartões e as contas fixas do mês.</p>
+        <div style="margin-top: 8px; border-radius: 12px; background: #f4f7fc; border: 1px solid rgba(20,40,80,0.10); padding: 4px 14px">
+          <div style="display: flex; justify-content: space-between; gap: 8px; padding: 10px 0; border-bottom: 1px solid #e6ebf4; font-size: 13.5px">
+            <span style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 4px; background: #10b981"></span>Salário</span>
+            <span class="r-num" style="font-weight: 700">R$ 4.000,00</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; gap: 8px; padding: 10px 0; font-size: 13.5px">
+            <span style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 4px; background: #820ad1"></span>Cartão roxo</span>
+            <span style="color: #5b6779">vence dia 10</span>
+          </div>
+        </div>
+      </li>
+      <li style="background: #ffffff; border: 1px solid rgba(20,40,80,0.10); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+        <span style="width: 36px; height: 36px; border-radius: 999px; background: #2563eb; color: #ffffff; display: flex; align-items: center; justify-content: center; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: 16px">2</span>
+        <h3 style="margin: 0; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 20px">Chame quem divide com você</h3>
+        <p style="margin: 0; color: #5b6779">Crie um grupo para a casa, a viagem ou o jantar e mande o código de convite. Só se quiser.</p>
+        <div style="margin-top: 8px; border-radius: 12px; background: #f4f7fc; border: 1px dashed #8b95a5; padding: 14px; display: flex; flex-direction: column; align-items: center; gap: 4px">
+          <span style="font-size: 12px; font-weight: 700; color: #5b6779">Código de convite</span>
+          <span class="r-num" style="font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 24px; letter-spacing: 0.2em; color: #111827">K7Q-4ZM</span>
+        </div>
+      </li>
+      <li style="background: #ffffff; border: 1px solid rgba(20,40,80,0.10); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 12px">
+        <span style="width: 36px; height: 36px; border-radius: 999px; background: #2563eb; color: #ffffff; display: flex; align-items: center; justify-content: center; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: 16px">3</span>
+        <h3 style="margin: 0; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 20px">Acompanhe e acerte</h3>
+        <p style="margin: 0; color: #5b6779">Veja o que vence, quanto é a sua parte e acerte com o código Pix pronto.</p>
+        <div style="margin-top: 8px; border-radius: 12px; background: #f4f7fc; border: 1px solid rgba(20,40,80,0.10); padding: 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px">
+          <div style="display: flex; flex-direction: column">
+            <span style="font-size: 12px; color: #5b6779">Ana te paga</span>
+            <span class="r-num" style="font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 24px">R$ 166,40</span>
+          </div>
+          <span style="display: inline-flex; align-items: center; min-height: 38px; padding: 0 14px; border-radius: 12px; background: #2563eb; color: #ffffff; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 14px">Copiar código</span>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <!-- Diferenciais: carrossel -->
+  <section id="diferenciais" aria-labelledby="dif-t" style="background: #ffffff; border-top: 1px solid rgba(20,40,80,0.10); border-bottom: 1px solid rgba(20,40,80,0.10)">
+    <div style="max-width: 1200px; margin: 0 auto; padding: clamp(64px, 8vw, 96px) clamp(16px, 4vw, 32px); display: flex; flex-direction: column; gap: 32px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 24px">
+        <div style="flex: 1 1 480px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+          <span style="align-self: flex-start; display: inline-flex; align-items: center; min-height: 28px; padding: 0 12px; border-radius: 999px; background: #e8efff; color: #1d4ed8; font-size: 12px; font-weight: 700">por que o rachaê</span>
+          <h2 id="dif-t" style="margin: 0; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: clamp(32px, 3.4vw, 40px); line-height: 1.15; letter-spacing: -0.02em">O que muda quando você vê tudo junto</h2>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px">
+          <span aria-live="polite" class="r-num" style="font-size: 13.5px; font-weight: 700; color: #5b6779; min-width: 48px; text-align: right" id="dif-contador">1 de 6</span>
+          <button type="button" id="dif-ant" aria-label="Diferencial anterior" aria-controls="dif-track" style="width: 44px; height: 44px; border-radius: 12px; border: 1px solid #8b95a5; background: #ffffff; color: #111827; display: flex; align-items: center; justify-content: center; cursor: pointer">
+            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"></path></svg>
+          </button>
+          <button type="button" id="dif-prox" aria-label="Próximo diferencial" aria-controls="dif-track" style="width: 44px; height: 44px; border-radius: 12px; border: 0; background: #2563eb; color: #ffffff; display: flex; align-items: center; justify-content: center; cursor: pointer">
+            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg>
+          </button>
+        </div>
+      </div>
+
+      <div id="dif-chips" class="lp-dif-index" role="group" aria-label="Ir para um diferencial" style="flex-wrap: wrap; gap: 8px">
+      </div>
+
+      <div role="region" aria-roledescription="carrossel" aria-label="Diferenciais do Rachaê. Use as setas do teclado para navegar" tabindex="0" id="dif-regiao" style="overflow: hidden; border-radius: 16px">
+        <div id="dif-track" style="display: flex; transition: transform 250ms ease; transform: translateX(0%)">
+        </div>
+      </div>
+
+      <div id="dif-pontos" class="lp-dif-dots" style="display: flex; justify-content: center">
+      </div>
+    </div>
+  </section>
+
+  <!-- Lista de espera -->
+  <section id="lista-de-espera" aria-labelledby="lista-t" style="max-width: 1200px; margin: 0 auto; padding: clamp(64px, 8vw, 96px) clamp(16px, 4vw, 32px)">
+    <div class="lp-band" style="background: #2563eb; border-radius: 16px; padding: clamp(24px, 5vw, 48px); display: flex; flex-wrap: wrap; align-items: center; gap: clamp(32px, 5vw, 64px)">
+      <div style="flex: 1 1 400px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+        <span style="align-self: flex-start; display: inline-flex; align-items: center; min-height: 28px; padding: 0 12px; border-radius: 999px; background: #ffffff; color: #1d4ed8; font-size: 12px; font-weight: 700">lista de espera</span>
+        <h2 id="lista-t" style="margin: 0; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: clamp(32px, 3.4vw, 40px); line-height: 1.1; letter-spacing: -0.02em; color: #ffffff">Comece a ver o seu dinheiro de outro jeito</h2>
+        <p style="margin: 0; font-size: 17px; color: #ffffff">Deixe o seu e-mail e avisamos quando o Rachaê abrir. Conte também como pretende usar: isso ajuda a definir o que chega primeiro.</p>
+        <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; color: #ffffff">
+          <li style="display: flex; align-items: center; gap: 10px">
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M20 6 9 17l-5-5"></path></svg>
+            As suas contas, as da casa e as da turma num lugar só
+          </li>
+          <li style="display: flex; align-items: center; gap: 10px">
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M20 6 9 17l-5-5"></path></svg>
+            A fatura e a sobra do salário antes do fim do mês
+          </li>
+        </ul>
+      </div>
+
+      <div class="lp-form" style="flex: 1 1 380px; min-width: 0; max-width: 480px; background: #ffffff; border-radius: 16px; padding: clamp(20px, 3vw, 32px); color: #111827">
+        <form id="wl-form" novalidate aria-labelledby="form-t" style="display: flex; flex-direction: column">
+          <h3 id="form-t" style="margin: 0 0 20px; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 22px">Entrar na lista de espera</h3>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 14px">
+            <div style="display: flex; flex-direction: column; min-width: 0">
+              <label for="wl-nome" style="font-size: 13px; font-weight: 700; color: #5b6779; margin-bottom: 6px">Nome</label>
+              <input id="wl-nome" class="wl-campo" type="text" autocomplete="given-name" maxlength="60" aria-invalid="false" style="box-sizing: border-box; width: 100%; height: 46px; padding: 0 12px; border-radius: 12px; border: 1px solid #8b95a5; background: #ffffff; color: #111827; font-family: Inter, sans-serif; font-size: 16px">
+              <span id="wl-nome-hint" hidden style="margin-top: 6px; font-size: 13px; color: #b91c1c"></span>
+            </div>
+            <div style="display: flex; flex-direction: column; min-width: 0">
+              <label for="wl-sobrenome" style="font-size: 13px; font-weight: 700; color: #5b6779; margin-bottom: 6px">Sobrenome</label>
+              <input id="wl-sobrenome" class="wl-campo" type="text" autocomplete="family-name" maxlength="60" aria-invalid="false" style="box-sizing: border-box; width: 100%; height: 46px; padding: 0 12px; border-radius: 12px; border: 1px solid #8b95a5; background: #ffffff; color: #111827; font-family: Inter, sans-serif; font-size: 16px">
+              <span id="wl-sobrenome-hint" hidden style="margin-top: 6px; font-size: 13px; color: #b91c1c"></span>
+            </div>
+          </div>
+
+          <label for="wl-email" style="font-size: 13px; font-weight: 700; color: #5b6779; margin: 14px 0 6px">E-mail</label>
+          <input id="wl-email" class="wl-campo" type="text" inputmode="email" autocomplete="email" maxlength="254" autocapitalize="off" spellcheck="false" aria-invalid="false" style="box-sizing: border-box; width: 100%; height: 46px; padding: 0 12px; border-radius: 12px; border: 1px solid #8b95a5; background: #ffffff; color: #111827; font-family: Inter, sans-serif; font-size: 16px">
+          <span id="wl-email-hint" hidden style="margin-top: 6px; font-size: 13px; color: #b91c1c"></span>
+
+          <fieldset style="border: 0; margin: 14px 0 0; padding: 0; min-width: 0">
+            <legend style="padding: 0; margin-bottom: 6px; font-size: 13px; font-weight: 700; color: #5b6779">Como pretende usar (opcional)</legend>
+            <div id="wl-usos" style="display: flex; flex-wrap: wrap; gap: 8px"></div>
+          </fieldset>
+
+          <fieldset style="border: 0; margin: 14px 0 0; padding: 0; min-width: 0">
+            <legend style="padding: 0; margin-bottom: 6px; font-size: 13px; font-weight: 700; color: #5b6779">Como soube do Rachaê (opcional)</legend>
+            <div id="wl-origens" style="display: flex; flex-wrap: wrap; gap: 8px"></div>
+          </fieldset>
+
+          <div id="wl-erro" role="alert" hidden style="margin-top: 20px; border-radius: 12px; background: #fdeaea; padding: 12px 14px; align-items: flex-start; gap: 10px">
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b91c1c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>
+            <span id="wl-erro-txt" style="font-size: 13.5px; color: #b91c1c"></span>
+          </div>
+
+          <div id="wl-lento" role="status" hidden style="margin-top: 20px; border-radius: 12px; background: #f4f7fc; padding: 12px 14px; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px">
+            <span style="font-size: 13.5px; color: #5b6779">Está demorando mais que o normal.</span>
+            <button type="button" id="wl-tentar" style="min-height: 38px; padding: 0 12px; border: 0; border-radius: 8px; background: #e8efff; color: #1d4ed8; font-family: Inter, sans-serif; font-weight: 700; font-size: 13px; cursor: pointer">Tentar de novo</button>
+          </div>
+
+          <button id="wl-enviar" class="lp-btn lp-btn-primary" type="submit" data-evento="lista_enviar" style="margin-top: 20px; width: 100%; min-height: 50px; border: 0; border-radius: 12px; background: #2563eb; color: #ffffff; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 17px; cursor: pointer">Entrar na lista de espera</button>
+          <p style="margin: 10px 0 0; font-size: 13px; color: #687282">Usamos o seu e-mail só para avisar sobre o lançamento. Ao entrar na lista, você concorda com a <a href="/politica-de-privacidade" style="color: #1d4ed8">política de privacidade</a>.</p>
+        </form>
+
+        <div id="wl-ok" role="status" hidden style="flex-direction: column; align-items: flex-start; gap: 12px">
+          <span aria-hidden="true" style="width: 48px; height: 48px; border-radius: 999px; background: #e3f8ef; color: #047857; display: flex; align-items: center; justify-content: center">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>
+          </span>
+          <h3 id="wl-ok-titulo" tabindex="-1" style="margin: 0; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 22px">Você está na lista</h3>
+          <p style="margin: 0; color: #5b6779">Vamos avisar em <strong id="wl-ok-email" style="color: #111827"></strong> quando o Rachaê abrir.</p>
+          <div style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px">
+            <button type="button" id="wl-copiar" style="min-height: 46px; padding: 0 20px; border: 0; border-radius: 12px; background: #2563eb; color: #ffffff; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 15px; cursor: pointer">Copiar link para chamar alguém</button>
+            <button type="button" id="wl-outro" style="min-height: 46px; padding: 0 20px; border: 0; border-radius: 12px; background: #e8efff; color: #1d4ed8; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 700; font-size: 15px; cursor: pointer">Cadastrar outro e-mail</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Perguntas -->
+  <section id="perguntas" aria-labelledby="faq-t" style="background: #ffffff; border-top: 1px solid rgba(20,40,80,0.10)">
+    <div style="max-width: 800px; margin: 0 auto; padding: clamp(64px, 8vw, 96px) clamp(16px, 4vw, 32px); display: flex; flex-direction: column; gap: 24px">
+      <h2 id="faq-t" style="margin: 0; font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: clamp(32px, 3.4vw, 40px); line-height: 1.15; letter-spacing: -0.02em; text-align: center">Perguntas frequentes</h2>
+      <div style="background: #f4f7fc; border: 1px solid rgba(20,40,80,0.10); border-radius: 16px; padding: 0 20px">
+        <details style="border-bottom: 1px solid #e6ebf4">
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">Preciso dividir conta com alguém para usar?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">Não. Você pode usar só para as suas contas e criar um grupo quando precisar, como numa viagem ou num jantar com a turma.</p>
+        </details>
+        <details style="border-bottom: 1px solid #e6ebf4">
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">Meus dados estão seguros?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">Sim. O Rachaê segue a LGPD. Os dados ficam nos servidores do Google (Firebase), protegidos pelo seu login: o que você lança num grupo só aparece para quem está nele, e a sua renda e os seus cartões só você vê. Os detalhes estão na <a href="/politica-de-privacidade">política de privacidade</a>.</p>
+        </details>
+        <details style="border-bottom: 1px solid #e6ebf4">
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">O Rachaê acessa a minha conta do banco?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">Não. O Rachaê não se conecta a nenhum banco, não pede senha de banco e não movimenta dinheiro. O Pix é pago no app do seu banco, com o código que o Rachaê mostra.</p>
+        </details>
+        <details style="border-bottom: 1px solid #e6ebf4">
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">Quem pode ver a minha chave Pix?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">Só as pessoas com quem você escolher compartilhar dentro do app, para que elas paguem a parte delas. A chave não é usada para mais nada.</p>
+        </details>
+        <details style="border-bottom: 1px solid #e6ebf4">
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">O que acontece se eu trocar de celular?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">Nada se perde. Contas, valores e grupos ficam na sua conta, não no aparelho: é só entrar com o mesmo e-mail ou com a mesma conta Google no celular novo.</p>
+        </details>
+        <details style="border-bottom: 1px solid #e6ebf4">
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">Posso excluir a minha conta?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">Sim, quando quiser. A exclusão apaga o seu cadastro e os seus dados dos nossos servidores e não pode ser desfeita. Para voltar a usar o Rachaê, é preciso fazer um novo cadastro, do zero.</p>
+        </details>
+        <details style="border-bottom: 1px solid #e6ebf4">
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">Quem está por trás do Rachaê?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">O Rachaê é uma iniciativa individual e apartidária, sem ligação com bancos, fintechs ou outras instituições financeiras.</p>
+        </details>
+        <details style="border-bottom: 1px solid #e6ebf4">
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">Quando o Rachaê abre?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">O Rachaê já está em versão beta, em testes. As versões para iOS e Android chegam depois dos estudos com usuários. Quem está na lista de espera recebe o aviso por e-mail.</p>
+        </details>
+        <details style="border-bottom: 1px solid #e6ebf4">
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">Preciso baixar na loja de apps?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">Por enquanto, não. Nesta versão beta, o Rachaê abre no navegador do celular e pode ser instalado na tela inicial, como qualquer app. Depois dos estudos com usuários, ele chega às lojas de iOS e Android.</p>
+        </details>
+        <details style="border-bottom: 1px solid #e6ebf4">
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">Como as outras pessoas entram num grupo?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">Você manda o código de convite do grupo. Quem recebe digita o código e já vê as despesas e a própria parte.</p>
+        </details>
+        <details style="border-bottom: 1px solid #e6ebf4">
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">Dá para dividir de um jeito que não seja meio a meio?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">Sim. Cada despesa pode ser dividida por igual, por porcentagem ou com o valor exato de cada pessoa.</p>
+        </details>
+        <details>
+          <summary style="min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; font-size: 16px">Quanto custa?
+            <svg class="lp-chev" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6779" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex: none; transition: transform 120ms ease"><path d="m6 9 6 6 6-6"></path></svg>
+          </summary>
+          <p style="margin: 0 0 16px; color: #5b6779">A conta do Rachaê é gratuita. No futuro, algumas funcionalidades novas podem ter mensalidade.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+  <!-- Rodapé -->
+  <footer style="background: #ffffff; border-top: 1px solid rgba(20,40,80,0.10)">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 24px clamp(16px, 4vw, 32px); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px">
+        <svg aria-hidden="true" width="28" height="28" viewBox="10 10 60 60" style="flex: none; display: block"><defs><linearGradient id="rb-grad-foot" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00D2FF"></stop><stop offset="50%" stop-color="#2563EB"></stop><stop offset="100%" stop-color="#5C82FF"></stop></linearGradient></defs><rect x="10" y="10" width="60" height="60" rx="16" fill="url(#rb-grad-foot)"></rect><path d="M45 18 L28 42 L41 42 L35 62 L52 38 L39 38 Z" fill="#FFFFFF"></path></svg>
+        <span style="font-family: 'Plus Jakarta Sans', Inter, sans-serif; font-weight: 800; font-size: 16px">Rachaê</span>
+        <span style="color: #5b6779; font-size: 13.5px">Aqui a conta fecha</span>
+        <span style="color: #687282; font-size: 13px">© 2026</span>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 13.5px">
+        <!-- <a class="lp-link" href="[TERMOS DE USO]" style="display: inline-flex; align-items: center; min-height: 44px">Termos de uso</a> (sem página ainda) -->
+        <a class="lp-link" href="/politica-de-privacidade" style="display: inline-flex; align-items: center; min-height: 44px">Privacidade</a>
+        <!-- <a class="lp-link" href="[CONTATO]" style="display: inline-flex; align-items: center; min-height: 44px">Contato</a> (sem página ainda) -->
+      </div>
+    </div>
+  </footer>
 </div>
-
-<script src="vendor/chart.umd.min.js" defer></script>
-<script type="module" src="js/app.js"></script>
+<script type="module" src="/lp/lp.js"></script>
 </body>
 </html>

@@ -233,6 +233,7 @@ ACTIONS.reload = () => location.reload();
 function mostrarPasso(id) {
   ['login-step-loading', 'form-entrar', 'form-conta', 'form-senha', 'form-vincular', 'form-criar-senha', 'step-verificar', 'step-sem-casa', 'login-error']
     .forEach(x => $(x).classList.toggle('hidden', x !== id));
+  if (ROTAS_LOGIN[id]) atualizarEndereco(...ROTAS_LOGIN[id]);
 }
 function mostrarErroInicial(msg) {
   mostrarPasso('login-error');
@@ -389,7 +390,7 @@ ACTIONS.submit_form_criar_senha = async form => {
 };
 
 // Link do email de confirmação volta para o app (com o convite, se houver)
-const linkDeVolta = () => location.origin + location.pathname + (CONVITE_URL ? '?convite=' + encodeURIComponent(CONVITE_URL) : '');
+const linkDeVolta = () => location.origin + '/login' + (CONVITE_URL ? '?convite=' + encodeURIComponent(CONVITE_URL) : '');
 function mostrarConfirmacaoEmail(user) {
   document.body.classList.add('on-login');
   $('screen-app').classList.add('hidden');
@@ -480,8 +481,12 @@ function irParaLogin() {
     document.querySelectorAll('.convite-aviso').forEach(p => p.classList.remove('hidden'));
     mostrarPasso('form-conta');
   } else {
-    mostrarPasso('form-entrar');
+    mostrarPasso(location.pathname === '/sign-up' ? 'form-conta' : 'form-entrar');
   }
+  try {
+    const aviso = sessionStorage.getItem('rachae_aviso');
+    if (aviso) { sessionStorage.removeItem('rachae_aviso'); hint('entrar-hint', aviso, 'ok'); }
+  } catch (e) {}
   renderInstallBanner();
 }
 async function goToLogin() {
@@ -655,6 +660,9 @@ async function loadGrupos() {
     showToast('Não deu para carregar os conjuntos. Confira a internet.', true);
     STATE.grupos = [];
   }
+  const rota = ROTA_INICIAL;
+  ROTA_INICIAL = null;
+  if (rota && STATE.currentTab !== 'casa') { abrirRota(rota); return; }
   // Ao abrir outro grupo, vai para o painel dele (exceto logo após criar, que abre os ajustes)
   switchTab(STATE.currentTab === 'casa' ? 'casa' : 'dashboard');
 }
@@ -846,6 +854,39 @@ ACTIONS.periodoIr = el => irParaMes(el.dataset.mes);
 const TELAS_QUE_SOBEM = ['casa', 'grupos', 'conta'];
 const NOMES_TELA = { dashboard: 'Início', despesa: 'Nova', pagamento: 'Pagar', historico: 'Histórico', gastos: 'Finanças',
   casa: 'Ajustes do grupo', grupos: 'Meus grupos', conta: 'Minha conta' };
+// ---------- Endereço de cada tela (a raiz do site é a landing page)
+const ROTAS = { dashboard: '/home', despesa: '/nova', pagamento: '/pagar', historico: '/historico', gastos: '/financas',
+  casa: '/ajustes-do-grupo', grupos: '/meus-grupos', conta: '/minha-conta' };
+const ROTAS_FIN = { resumo: '', fixos: '/fixos', cartoes: '/cartoes', previsao: '/previsao', grupos: '/grupos', config: '/renda-e-cartoes' };
+const ROTAS_LOGIN = { 'form-entrar': ['/login', 'Entrar'], 'form-conta': ['/sign-up', 'Criar conta'] };
+/** Troca o endereço e o título da aba do navegador sem criar entrada no histórico. */
+function atualizarEndereco(caminho, titulo) {
+  if (!caminho) {
+    const fin = STATE.currentTab === 'gastos';
+    caminho = (ROTAS[STATE.currentTab] || '/home') + (fin ? ROTAS_FIN[FIN_UI.aba] || '' : '');
+    titulo = fin && FIN_UI.aba === 'config' ? 'Renda e cartões' : NOMES_TELA[STATE.currentTab];
+  }
+  if (location.pathname !== caminho) { try { history.replaceState(history.state, '', caminho); } catch (e) {} }
+  document.title = titulo ? titulo + ' · Rachaê' : 'Rachaê';
+}
+/** Tela pedida no endereço ao abrir o app (ex.: /financas/cartoes): abre depois do login. */
+function rotaDoEndereco() {
+  const p = location.pathname.replace(/\/+$/, '');
+  if (p === '/financas' || p.startsWith('/financas/')) {
+    const finAba = Object.keys(ROTAS_FIN).find(k => '/financas' + ROTAS_FIN[k] === p);
+    return { tab: 'gastos', finAba };
+  }
+  const tab = Object.keys(ROTAS).find(k => ROTAS[k] === p);
+  return tab ? { tab } : null;
+}
+let ROTA_INICIAL = rotaDoEndereco();
+function abrirRota(r) {
+  if (r.finAba) { FIN_UI.aba = r.finAba; FIN_UI.form = null; if (r.finAba !== 'config') store.set(K.finAba, r.finAba); }
+  // Telas que "sobem" abertas direto pelo endereço: o Voltar leva para o Início
+  NAV = TELAS_QUE_SOBEM.includes(r.tab) ? [{ tab: 'dashboard', scroll: 0 }] : [];
+  switchTab(r.tab, { manterPilha: true });
+}
+
 let NAV = [];
 const ondeEstou = () => ({ tab: STATE.currentTab, finAba: FIN_UI.aba, scroll: window.scrollY });
 // Cada passo do caminho também vira uma entrada no histórico do navegador: assim o botão/gesto de voltar
@@ -866,7 +907,7 @@ function descartarHistorico(n) {
   history.go(-n);
 }
 window.addEventListener('popstate', () => {
-  if (IGNORAR_POP) { IGNORAR_POP--; return; }
+  if (IGNORAR_POP) { IGNORAR_POP--; if (STATE.pessoa) atualizarEndereco(); return; }
   if (HIST_EXTRA > 0) HIST_EXTRA--;
   if (NAV.length) voltar(); // botão/gesto de voltar do celular
 });
@@ -995,6 +1036,7 @@ function switchTab(tab, opts = {}) {
   if (tab === 'conta') renderMinhaConta();
   if (tab === 'gastos') renderMeusGastos();
   atualizarVoltar();
+  atualizarEndereco();
 }
 
 // =================================================================== Dashboard
@@ -2463,7 +2505,7 @@ async function renderCasa() {
   const membros = await api('membros');
   const grupos = await api('grupos');
   const convite = dono ? Firebase.conviteAtual() : null;
-  const link = convite ? location.origin + location.pathname + '?convite=' + convite : '';
+  const link = convite ? location.origin + '/sign-up?convite=' + convite : '';
   const eu = Firebase.usuarioAtual();
   el.innerHTML = `
     <h2 class="page-title">Ajustes de ${h(casa.nome)}</h2>
@@ -2673,8 +2715,37 @@ function minhaContaHtml(meuPix) {
 
     <div class="card">
       <button class="secondary danger" type="button" data-action="logout" style="margin-top:0">Sair da conta neste aparelho</button>
+    </div>
+
+    <div class="card">
+      <h3>Excluir conta</h3>
+      ${EDITANDO_CONTA === 'excluir' ? `
+        <form data-submit="excluirConta" novalidate>
+          <p class="hint">Isso apaga para sempre o seu cadastro, as suas Finanças (renda, cartões e contas), as suas despesas pessoais
+            e a sua chave Pix, e tira você de todos os grupos. Não dá para desfazer.</p>
+          <p class="hint">As despesas e pagamentos que você lançou nos grupos continuam lá, porque entram nas contas das outras pessoas.
+            Grupos em que você está sozinha(o) são excluídos junto.</p>
+          <label for="excluir-confirma">Para confirmar, digite EXCLUIR</label>
+          <input type="text" id="excluir-confirma" autocomplete="off" autocapitalize="characters" spellcheck="false">
+          ${c.temSenha ? campoSenhaAtual('excluir-senha', 'a exclusão') : '<p class="hint">Vamos pedir para você confirmar com o Google.</p>'}
+          <div class="btn-row">${cancelar}<button class="primary danger" type="submit">Excluir minha conta</button></div>
+        </form>` : `
+        <div class="list-row">
+          <div>Apagar a conta e os seus dados<div class="sub">Não dá para desfazer</div></div>
+          <button type="button" class="del-btn" data-action="editarConta" data-qual="excluir">Excluir</button>
+        </div>`}
     </div>`;
 }
+ACTIONS.excluirConta = async form => {
+  if ($('excluir-confirma').value.trim().toUpperCase() !== 'EXCLUIR') { showToast('Digite EXCLUIR para confirmar. Nada foi apagado.', true); vibrate(60); return; }
+  await withBusy(form.querySelector('button[type=submit]'), async () => {
+    try {
+      await Firebase.excluirConta($('excluir-senha') ? $('excluir-senha').value : '');
+      try { sessionStorage.setItem('rachae_aviso', 'Sua conta foi excluída.'); } catch (e) {}
+      location.replace('/login');
+    } catch (err) { if (err.code !== 'CANCELADO') onApiError(err); }
+  });
+};
 ACTIONS.editarConta = el => { EDITANDO_CONTA = el.dataset.qual || ''; redesenharConta(); };
 ACTIONS.salvarNomeConta = async form => {
   await withBusy(form.querySelector('button[type=submit]'), async () => {
@@ -2947,7 +3018,7 @@ ACTIONS.convidarPorEmail = async form => {
     try {
       const codigo = await Firebase.convidarPorEmail(email);
       const casa = Firebase.casaAtual();
-      const link = location.origin + location.pathname + '?convite=' + codigo;
+      const link = location.origin + '/sign-up?convite=' + codigo;
       const assunto = 'Convite para o grupo ' + casa.nome + ' no Rachaê';
       const corpo = 'Oi! Quero dividir as contas com você no grupo "' + casa.nome + '" do Rachaê.\n\n' +
         'Abra o link para entrar: ' + link + '\n\nSe você já usa o Rachaê, o convite também aparece no app ' +
@@ -3095,6 +3166,7 @@ ACTIONS.finAba = el => {
   if (FIN_UI.aba !== 'config') store.set(K.finAba, FIN_UI.aba);
   desenharFinancas();
   atualizarVoltar();
+  atualizarEndereco();
   window.scrollTo(0, 0);
 };
 ACTIONS.finOrigem = el => {
@@ -4006,7 +4078,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 }
 
 // Só no computador de desenvolvimento: permite testar telas com dados de exemplo pelo console

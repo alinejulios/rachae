@@ -5,6 +5,23 @@
   "installCommand": null,
   "outputDirectory": "public",
   "cleanUrls": false,
+  "rewrites": [
+    { "source": "/login", "destination": "/app.html" },
+    { "source": "/sign-up", "destination": "/app.html" },
+    { "source": "/home", "destination": "/app.html" },
+    { "source": "/nova", "destination": "/app.html" },
+    { "source": "/pagar", "destination": "/app.html" },
+    { "source": "/historico", "destination": "/app.html" },
+    { "source": "/financas", "destination": "/app.html" },
+    { "source": "/financas/:aba(fixos|cartoes|previsao|grupos|renda-e-cartoes)", "destination": "/app.html" },
+    { "source": "/ajustes-do-grupo", "destination": "/app.html" },
+    { "source": "/meus-grupos", "destination": "/app.html" },
+    { "source": "/minha-conta", "destination": "/app.html" },
+    { "source": "/politica-de-privacidade", "destination": "/politica-de-privacidade.html" }
+  ],
+  "redirects": [
+    { "source": "/privacidade", "destination": "/politica-de-privacidade", "permanent": true }
+  ],
   "headers": [
     {
       "source": "/(.*)",
@@ -17,15 +34,19 @@
       ]
     },
     {
-      "source": "/(sw.js|index.html|firebase-config.js|manifest.webmanifest)",
+      "source": "/(sw.js|index.html|app.html|politica-de-privacidade.html|firebase-config.js|manifest.webmanifest)",
       "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     },
     {
-      "source": "/(css|js)/(.*)",
+      "source": "/(login|sign-up|home|nova|pagar|historico|financas|financas/:aba|ajustes-do-grupo|meus-grupos|minha-conta|politica-de-privacidade)",
       "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     },
     {
-      "source": "/(vendor|icons)/(.*)",
+      "source": "/(css|js|lp)/(.*)",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+    },
+    {
+      "source": "/(vendor|icons|lp/assets)/(.*)",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=604800" }]
     }
   ]
