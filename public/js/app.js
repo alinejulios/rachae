@@ -2996,11 +2996,14 @@ const corVar = n => `var(${CAT_PALETTE_VARS[((n % 8) + 8) % 8]})`;
 const fontesDe = fin => (fin.fontes || []).slice().sort((a, b) => (a.cor || 0) - (b.cor || 0));
 const fontesAtivas = () => fontesDe(FIN_CACHE || {}).filter(f => !f.arquivada);
 const fontePorId = id => ((FIN_CACHE && FIN_CACHE.fontes) || []).find(f => f.id === id) || null;
-// Cores dos cartões/contas: as 8 do app + 4 extras + 12 cores de bancos (todas com versão clara e escura em app.css).
+// Cores dos cartões/contas: as 8 do app + 4 extras + 12 de bancos (todas com versão clara e escura em app.css).
 // A cor fica salva como a posição nesta lista: só acrescentar no fim, nunca reordenar (mudaria a cor de cartões já salvos).
 const CORES_FONTE = [...CAT_PALETTE_VARS, ...Array.from({ length: 16 }, (_, i) => '--fonte-' + (i + 9))];
 const NOMES_COR = ['Azul', 'Laranja', 'Verde', 'Amarelo', 'Rosa', 'Verde-escuro', 'Roxo', 'Vermelho', 'Azul-claro', 'Grafite', 'Marrom', 'Lilás',
-  'Ciano', 'Azul-marinho', 'Violeta', 'Verde-neon', 'Carmim', 'Vermelho-vivo', 'Laranja-escuro', 'Tangerina', 'Verde-folha', 'Rosa-chiclete', 'Vermelho-tomate', 'Carvão'];
+  'Ciano Mercado Pago', 'Azul Mercado Pago', 'Roxo Nubank', 'Verde Next', 'Vermelho Bradesco', 'Vermelho Santander',
+  'Laranja Itaú', 'Laranja Inter', 'Verde PicPay', 'Rosa Flash', 'Vermelho iFood', 'Carbon C6'];
+// Ordem no seletor (só a exibição): por família de cor — azuis, roxos, rosas, vermelhos, laranjas e amarelo, verdes, neutros.
+const ORDEM_CORES = [0, 8, 12, 13, 6, 14, 11, 4, 21, 7, 16, 17, 22, 1, 18, 19, 3, 2, 5, 15, 20, 10, 9, 23];
 const corFonte = f => (f ? `var(${CORES_FONTE[((f.cor || 0) % CORES_FONTE.length + CORES_FONTE.length) % CORES_FONTE.length]})` : 'var(--cat-other)');
 /** Primeira cor ainda não usada por outro cartão/conta (sugestão ao cadastrar). */
 function corLivre(fin) {
@@ -3013,7 +3016,7 @@ function coresHtml(fin, escolhida, idAtual) {
   const donos = {};
   (fin.fontes || []).filter(f => !f.arquivada && f.id !== idAtual).forEach(f => { (donos[f.cor] = donos[f.cor] || []).push(f.nome); });
   return `<span class="field-label">Cor (nos gráficos e etiquetas)</span>
-    <div class="cores" role="radiogroup" aria-label="Cor">${CORES_FONTE.map((v, i) => `
+    <div class="cores" role="radiogroup" aria-label="Cor">${ORDEM_CORES.map(i => [CORES_FONTE[i], i]).map(([v, i]) => `
       <button type="button" class="cor-op" role="radio" data-action="finCor" data-k="${i}" aria-checked="${i === escolhida}"
         aria-label="${NOMES_COR[i]}${donos[i] ? ' (usada por ' + h(donos[i].join(', ')) + ')' : ''}" title="${NOMES_COR[i]}${donos[i] ? ' · ' + h(donos[i].join(', ')) : ''}"
         style="background:var(${v})">${donos[i] ? '<span class="usada"></span>' : ''}</button>`).join('')}</div>
