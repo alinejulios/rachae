@@ -1074,7 +1074,7 @@ async function gravar(colecao, id, campos) {
   return (await addDoc(finCol(colecao), { ...campos, criadoEm: serverTimestamp() })).id;
 }
 /** Cartão, conta ou benefício. Remover só arquiva: os lançamentos antigos continuam mostrando o nome. */
-export const N_CORES_FONTE = 12;
+export const N_CORES_FONTE = 24; // cores 0–11 do app + 12–23 de bancos (ver CORES_FONTE em app.js)
 export const salvarFonte = ({ id, nome, tipo, fecha, vence, mensal, dia, cor }) => tenta(async () => {
   if (!['credito', 'debito', 'beneficio'].includes(tipo)) throw new ApiError('Escolha o tipo.');
   const campos = { nome: textoOk(nome, 30, 'Dê um nome (ex.: Nubank, VR).'), tipo };

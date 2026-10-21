@@ -21,6 +21,7 @@ const ICONES = {
   ok: '<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5 11 15l4.5-6"/>',
   grupo: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
   mais: '<path d="M12 5v14M5 12h14"/>',
+  seta: '<path d="m6 9 6 6 6-6"/>',
   conta: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/>',
   cartao: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
   sair: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>',
@@ -2995,9 +2996,11 @@ const corVar = n => `var(${CAT_PALETTE_VARS[((n % 8) + 8) % 8]})`;
 const fontesDe = fin => (fin.fontes || []).slice().sort((a, b) => (a.cor || 0) - (b.cor || 0));
 const fontesAtivas = () => fontesDe(FIN_CACHE || {}).filter(f => !f.arquivada);
 const fontePorId = id => ((FIN_CACHE && FIN_CACHE.fontes) || []).find(f => f.id === id) || null;
-// Cores dos cartões/contas: as 8 do app + 4 extras (todas com versão clara e escura em app.css)
-const CORES_FONTE = [...CAT_PALETTE_VARS, '--fonte-9', '--fonte-10', '--fonte-11', '--fonte-12'];
-const NOMES_COR = ['Azul', 'Laranja', 'Verde', 'Amarelo', 'Rosa', 'Verde-escuro', 'Roxo', 'Vermelho', 'Azul-claro', 'Grafite', 'Marrom', 'Lilás'];
+// Cores dos cartões/contas: as 8 do app + 4 extras + 12 cores de bancos (todas com versão clara e escura em app.css).
+// A cor fica salva como a posição nesta lista: só acrescentar no fim, nunca reordenar (mudaria a cor de cartões já salvos).
+const CORES_FONTE = [...CAT_PALETTE_VARS, ...Array.from({ length: 16 }, (_, i) => '--fonte-' + (i + 9))];
+const NOMES_COR = ['Azul', 'Laranja', 'Verde', 'Amarelo', 'Rosa', 'Verde-escuro', 'Roxo', 'Vermelho', 'Azul-claro', 'Grafite', 'Marrom', 'Lilás',
+  'Ciano', 'Azul-marinho', 'Violeta', 'Verde-neon', 'Carmim', 'Vermelho-vivo', 'Laranja-escuro', 'Tangerina', 'Verde-folha', 'Rosa-chiclete', 'Vermelho-tomate', 'Carvão'];
 const corFonte = f => (f ? `var(${CORES_FONTE[((f.cor || 0) % CORES_FONTE.length + CORES_FONTE.length) % CORES_FONTE.length]})` : 'var(--cat-other)');
 /** Primeira cor ainda não usada por outro cartão/conta (sugestão ao cadastrar). */
 function corLivre(fin) {
@@ -3114,7 +3117,12 @@ const linhaValor = (cor, nome, valor, total, extra = '') => `
 const pillFonte = i => {
   if (!i.pagouEu) return `<span class="pill">paga ${h(i.pagoPorNome)}</span>`;
   const f = fontePorId(i.fonteId);
-  return f ? `<span class="pill"><span class="dot" style="background:${corFonte(f)}"></span>${h(f.nome)}</span>` : '';
+  if (!f) return '';
+  const conteudo = `<span class="dot" style="background:${corFonte(f)}"></span>${h(f.nome)}`;
+  // Cartão escolhido pelo "Pago com": a etiqueta é o lugar de trocar (o select fica invisível por cima)
+  if (!podeEscolherFonte(i)) return `<span class="pill">${conteudo}</span>`;
+  return `<span class="pill pill-escolha">${conteudo}${icone('seta', 2.5)}
+    <select data-change="finVinculo" data-chave="${h(i.ref.vinculo)}" aria-label="Pago com: ${h(f.nome)}. Trocar">${opcoesVinculoHtml(i)}</select></span>`;
 };
 const tipoTexto = i => (i.agregado ? `conta fixa · ${i.agregado} ${i.agregado === 1 ? 'mês' : 'meses'}`
   : i.tipo === 'fixo' ? 'conta fixa' : i.tipo === 'parcela' ? `parcela ${i.num}/${i.n}` : 'à vista');
@@ -3143,19 +3151,27 @@ function corCategoria(lista, cat) {
   const i = lista.findIndex(x => x.chave === cat);
   return i >= 0 && i < 7 ? corVar(i) : 'var(--cat-other)';
 }
-/** "Pago com": qual cartão/conta foi usado (só para o que você pagou e que fica num grupo ou é antigo). */
+/** "Pago com": qual cartão/conta foi usado (só para o que você pagou e que fica num grupo ou é antigo).
+ * Vazio: um chip de escolha rápida embaixo da linha. Escolhido: o chip some e fica só a etiqueta do cartão
+ * na linha de cima, que abre a mesma lista para corrigir (ver pillFonte). */
+const opcoesVinculoHtml = i => `<option value="">Pix / dinheiro / não sei</option>
+      ${fontesAtivas().map(f => `<option value="${h(f.id)}" ${f.id === i.fonteId ? 'selected' : ''}>${h(f.nome)}</option>`).join('')}`;
+const podeEscolherFonte = i => !!(i.pagouEu && i.ref && i.ref.vinculo && fontesAtivas().length);
 function selectVinculoHtml(i) {
-  const opcoes = fontesAtivas();
-  if (!opcoes.length) return '';
-  return `<label class="fin-vinc">Pago com
-    <select class="chart-select" data-change="finVinculo" data-chave="${h(i.ref.vinculo)}" aria-label="Pago com">
-      <option value="">Pix / dinheiro / não sei</option>
-      ${opcoes.map(f => `<option value="${h(f.id)}" ${f.id === i.fonteId ? 'selected' : ''}>${h(f.nome)}</option>`).join('')}
-    </select></label>`;
+  if (!podeEscolherFonte(i) || fontePorId(i.fonteId)) return '';
+  // Chip de escolha: parece um chip pequeno; o select nativo fica invisível por cima (16px, sem zoom no iPhone)
+  return `<div class="fin-vinc"><span aria-hidden="true">Pago com</span>
+    <span class="chip-select"><span class="chip-select-txt">Escolher</span>${icone('seta', 2.5)}
+    <select data-change="finVinculo" data-chave="${h(i.ref.vinculo)}" aria-label="Pago com">
+      <option value="" selected disabled hidden>Escolher</option>${opcoesVinculoHtml(i).replace(' selected', '')}
+    </select></span></div>`;
 }
 ACTIONS.finVinculo = async el => {
-  try { await Firebase.salvarVinculo(el.dataset.chave, el.value); showToast('Cartão salvo. Só você vê.'); }
-  catch (err) { onApiError(err); }
+  try {
+    await Firebase.salvarVinculo(el.dataset.chave, el.value);
+    showToast('Cartão salvo. Só você vê.');
+    if (STATE.currentTab === 'gastos') renderMeusGastos(); // o chip some e a etiqueta aparece na linha
+  } catch (err) { onApiError(err); }
 };
 /** Botões de cada lançamento, conforme de onde ele vem. */
 function acoesItemHtml(i, ctx) {

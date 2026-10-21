@@ -52,6 +52,19 @@
   --fonte-10: #5b6474;
   --fonte-11: #8a5a2b;
   --fonte-12: #a855f7;
+  /* cores de banco para cartões e contas (o seletor não mostra o nome do banco) */
+  --fonte-13: #00bcff;
+  --fonte-14: #0a0080;
+  --fonte-15: #820ad1;
+  --fonte-16: #00ff5f;
+  --fonte-17: #cc092f;
+  --fonte-18: #ec0000;
+  --fonte-19: #ec7000;
+  --fonte-20: #ff7a00;
+  --fonte-21: #21c25e;
+  --fonte-22: #ff4f9a;
+  --fonte-23: #ea1d2c;
+  --fonte-24: #242424;
   --series-1: var(--brand-blue);
   --on-brand: var(--white);
   --btn-primary-bg: var(--brand-blue);
@@ -148,6 +161,12 @@
     --fonte-10: #a7b0bf;
     --fonte-11: #c08a55;
     --fonte-12: #c084fc;
+    --fonte-14: #5b55e0;
+    --fonte-15: #a64ae6;
+    --fonte-17: #e5334f;
+    --fonte-18: #ff3b3b;
+    --fonte-23: #f04452;
+    --fonte-24: #a3a3a3;
     --on-brand: var(--night-950);
     --on-warning: var(--amber-950);
     --progress-current: var(--aqua-450);
@@ -665,8 +684,24 @@ body.on-login #toast { bottom: calc(24px + var(--safe-bottom)); }
 .pill.est { background: var(--brand-aqua-tint); color: var(--brand-aqua-dark); }
 .fin-acoes { display: flex; flex-wrap: wrap; align-items: center; gap: 0 14px; }
 .fin-acoes .hint { margin: 4px 0 0; }
-.fin-vinc { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; font-size: 12.5px; }
-.fin-vinc select { font-size: 16px; padding: 4px 30px 4px 10px; min-height: var(--tap-chip); }
+.fin-vinc { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; font-size: 12.5px; font-weight: 600; color: var(--text-secondary); }
+/* Chip de escolha: um select com cara de chip compacto. O select nativo fica invisível por cima,
+   com 16px para o iPhone não dar zoom; o texto visível segue o chip (12.5/700). */
+.chip-select { position: relative; display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; min-height: var(--tap-chip);
+  padding: 6px 10px 6px 12px; border: 1px solid var(--card-border); border-radius: var(--radius-pill); background: var(--surface-1);
+  color: var(--text-primary); font-size: 12.5px; font-weight: 700; }
+.chip-select-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-select svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--text-muted); }
+.chip-select select { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; padding: 0; border: 0; opacity: 0;
+  font-size: 16px; cursor: pointer; background: none; }
+.chip-select:active { background: var(--surface-2); }
+.chip-select:has(select:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* Etiqueta do cartão que também troca o cartão: setinha discreta; a área de toque cresce até 38px sem mudar o desenho */
+.pill-escolha { position: relative; }
+.pill-escolha svg { width: 10px; height: 10px; margin-left: 2px; vertical-align: -1px; color: var(--text-muted); }
+.pill-escolha select { position: absolute; inset: -10px -4px; width: calc(100% + 8px); height: calc(100% + 20px); min-height: 0; padding: 0; border: 0;
+  opacity: 0; font-size: 16px; cursor: pointer; background: none; }
+.pill-escolha:has(select:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .mini-seg { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
 .mini-seg button { border: 1px solid var(--card-border); background: var(--surface-1); color: var(--text-secondary); border-radius: var(--radius-pill);
   padding: 6px 10px; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; min-height: var(--tap-chip); }
