@@ -666,6 +666,20 @@ body.on-login #toast { bottom: calc(24px + var(--safe-bottom)); }
 .benef .top small { font-weight: 600; color: var(--text-muted); font-size: 12px; }
 .benef .trilho { height: var(--bar-h); border-radius: var(--radius-xs); background: var(--gridline); overflow: hidden; }
 .benef .trilho span { display: block; height: 100%; border-radius: var(--radius-xs); }
+.ciclo { padding: 12px 0; border-bottom: 1px solid var(--gridline); }
+.ciclo:first-of-type { padding-top: 0; }
+.ciclo .top { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+.ciclo .top > span:last-child { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ciclo .top small { font-weight: 600; color: var(--text-muted); font-size: 12px; }
+.ciclo .trilho { height: var(--bar-h); border-radius: var(--radius-xs); background: var(--gridline); overflow: hidden; display: flex; }
+.ciclo .trilho span { display: block; height: 100%; }
+.ciclo .trilho .prev { background: var(--brand-blue); opacity: .35; }
+.ciclo .linhas { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--text-secondary); margin-top: 6px; }
+.ciclo .linhas b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.ciclo .linhas .sobra b { color: var(--good-text); }
+.ciclo .linhas .falta b { color: var(--critical); }
+.ciclo-itens { margin-top: 8px; }
+.ciclo-itens > summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--brand-blue); }
 .limite .bar-row { margin: 6px 0 2px; }
 .limite .sub { font-size: 12px; color: var(--text-secondary); font-weight: 600; margin-bottom: 10px; text-align: right; }
 .limite .sub.estoura { color: var(--critical-text); }

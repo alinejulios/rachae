@@ -103,7 +103,7 @@ export function montarItens({ grupos, meUid, fin, mesAtual, horizonte = 12 }) {
       if (!v || !(v.valor > 0)) continue;
       add({ chave: 'fixo:' + fx.id + '@' + mes, origem: 'eu', tipo: 'fixo', descricao: fx.descricao, categoria: fx.categoria,
         fonteId: fx.fonteId || null, pagouEu: true, mes, valor: v.valor, cobrado: v.valor, total: v.valor,
-        estimado: v.estimado, confirmar: !!fx.estimado && mes === mesAtual && !((fx.confirmados || {})[mes] > 0),
+        dia: fx.dia || null, estimado: v.estimado, confirmar: !!fx.estimado && mes === mesAtual && !((fx.confirmados || {})[mes] > 0),
         ref: { kind: 'fixo', id: fx.id } });
     }
   });
@@ -200,6 +200,83 @@ export function rendaDoMes(rendas, mes) {
     if (r.ate && mes > r.ate) return t;
     return t + r.valor;
   }, 0);
+}
+
+// ------------------------------------------------------------------ fluxo do salário (depósito a depósito)
+/** 'aaaa-mm-dd' de um dia do mês (dia 31 em mês de 30 vira 30). */
+const diaNoMes = (mes, dia) => {
+  const [a, m] = mes.split('-').map(Number);
+  return mes + '-' + String(Math.min(Math.max(1, Number(dia) || 1), new Date(a, m, 0).getDate())).padStart(2, '0');
+};
+
+/** Depósitos de renda de um mês, um por dia (salário que cai junto com outra renda vira um depósito só). */
+export function depositosDoMes(rendas, mes) {
+  const porDia = new Map();
+  (rendas || []).forEach(r => {
+    if (r.tipo === 'extra' ? r.mes !== mes : (r.desde && mes < r.desde) || (r.ate && mes > r.ate)) return;
+    const data = diaNoMes(mes, r.dia);
+    const d = porDia.get(data) || { data, valor: 0, nomes: [] };
+    d.valor += r.valor || 0;
+    d.nomes.push(r.descricao);
+    porDia.set(data, d);
+  });
+  return [...porDia.values()].sort((a, b) => a.data.localeCompare(b.data));
+}
+
+/**
+ * Dia em que um gasto sai do dinheiro da pessoa: no cartão de crédito, o vencimento da fatura;
+ * senão a data do lançamento (parcela: o mesmo dia, no mês dela); conta fixa sem data: o dia
+ * cadastrado nela ou, sem dia, o 1º depósito do mês.
+ */
+export function dataDaSaida(i, fonte, primeiroDeposito) {
+  if (i.pagouEu && ehCredito(fonte)) return diaNoMes(i.mes, fonte.vence || fonte.fecha);
+  if (i.data) return i.data.slice(0, 7) === i.mes ? i.data.slice(0, 10) : diaNoMes(i.mes, Number(i.data.slice(8, 10)));
+  if (i.dia) return diaNoMes(i.mes, i.dia);
+  return primeiroDeposito(i.mes) || i.mes + '-01';
+}
+
+/**
+ * Ciclos do salário que tocam o mês: cada depósito de renda paga o que sai até o próximo depósito.
+ * Inclui o último ciclo do mês anterior quando ele ainda paga os primeiros dias deste mês.
+ * Conta a parte da pessoa (como em "Sobra do salário"); benefícios (VR, VA…) ficam de fora.
+ * @returns {{data, ate, valor, nomes, saiu, vaiSair, sobra, itens, atual}[]} `ate` = dia do próximo depósito (exclusivo)
+ */
+export function fluxoDoSalario({ itens, fontes, rendas, mes, hoje }) {
+  const fontesMap = Object.fromEntries((fontes || []).map(f => [f.id, f]));
+  const cache = {};
+  const deps = m => cache[m] || (cache[m] = depositosDoMes(rendas, m));
+  const proximo = (m, depoisDe) => {
+    for (let k = 0; k <= 12; k++) {
+      const d = deps(addM(m, k)).find(x => x.data > depoisDe);
+      if (d) return d.data;
+    }
+    return null;
+  };
+  const anterior = deps(addM(mes, -1)).slice(-1);
+  const ciclos = [...anterior, ...deps(mes)].map(d => ({ ...d, ate: proximo(d.data.slice(0, 7), d.data), saiu: 0, vaiSair: 0, itens: [] }))
+    .filter(c => c.data >= mes || !c.ate || c.ate > mes + '-01');
+  if (!ciclos.some(c => c.data.slice(0, 7) === mes)) return [];
+  // Sem depósito seguinte (renda que termina): o ciclo vai até o fim do mês seguinte
+  ciclos.forEach(c => { if (!c.ate) c.ate = addM(c.data.slice(0, 7), 2) + '-01'; });
+  const ini = ciclos[0].data, fim = ciclos[ciclos.length - 1].ate;
+  const primeiro = m => (deps(m)[0] || {}).data;
+  (itens || []).forEach(i => {
+    const f = fontesMap[i.fonteId];
+    if (i.pagouEu && f && f.tipo === 'beneficio') return;
+    if (i.mes < addM(mes, -2) || i.mes > addM(mes, 2)) return;
+    const data = dataDaSaida(i, f, primeiro);
+    if (data < ini || data >= fim) return;
+    const c = ciclos.find(x => data >= x.data && data < x.ate);
+    if (!c) return;
+    c.itens.push({ ...i, saida: data });
+    if (data <= hoje) c.saiu += i.valor; else c.vaiSair += i.valor;
+  });
+  ciclos.forEach(c => {
+    c.sobra = c.valor - c.saiu - c.vaiSair;
+    c.atual = c.data <= hoje && hoje < c.ate;
+    c.itens.sort((a, b) => b.saida.localeCompare(a.saida));
+  });
+  return ciclos;
 }
 
 /** À vista dos meses futuros não existe ainda: estimativa = média dos 3 meses anteriores ao atual. */

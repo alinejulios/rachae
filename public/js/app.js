@@ -1,7 +1,7 @@
 import * as Firebase from './api.js';
 import { api, PESSOAL } from './api.js';
 import { ehMensal } from './calc.js';
-import { montarItens, soma, somarPor, rendaDoMes, mediaAvista, mediaCategoria, avisos, addM, mesFatura, ehCredito, primeiroMes,
+import { montarItens, soma, somarPor, rendaDoMes, fluxoDoSalario, mediaAvista, mediaCategoria, avisos, addM, mesFatura, ehCredito, primeiroMes,
   CATEGORIAS } from './financas.js';
 import { payloadPix, chaveLegivel, TIPOS_CHAVE, nomeParaQR } from './pix.js';
 import qrcode from '../vendor/qrcode.mjs';
@@ -1852,6 +1852,9 @@ function renderFormPessoal() {
       <p class="hint" id="fin-parcela-hint"></p>
       <label for="fin-data">${fixo ? 'Começa em' : 'Data'}</label>
       <input type="date" id="fin-data" data-change="finAtualizar" value="${d ? (fixo ? d.desde + '-01' : d.data) : todayStr()}">
+      ${fixo ? `<div id="fin-dia-box"><label for="fin-dia">Dia do pagamento <span class="opcional">(opcional)</span></label>
+        <input type="text" id="fin-dia" inputmode="numeric" pattern="[0-9]*" maxlength="2" placeholder="Ex.: 10" value="${d && d.dia ? d.dia : ''}">
+        <p class="hint">Diz de qual depósito do salário a conta sai. Sem dia, sai do primeiro do mês.</p></div>` : ''}
       <label for="fin-categoria">Categoria</label>
       <select id="fin-categoria" data-change="escolherCategoria" data-antes="${h(cat)}">${opcoesCategoria(cat, cat)}</select>
       <p class="hint">Só você vê. Não entra na divisão de nenhum grupo.</p>
@@ -1875,6 +1878,7 @@ ACTIONS.finAtualizar = () => {
   const t = FIN_FORM.tipo;
   const data = $('fin-data').value || todayStr();
   $('fin-seguinte-box').classList.toggle('hidden', t !== 'parcelado' || cartao);
+  if ($('fin-dia-box')) $('fin-dia-box').classList.toggle('hidden', cartao); // no cartão, o vencimento da fatura decide
   $('fin-fatura-hint').innerHTML = cartao ? `<div class="fatura-hint">${icone('cartao')}<span>${t === 'fixo'
     ? `Cobrada todo mês na fatura do <b>${h(f.nome)}</b>.` : textoFatura(f, data)}</span></div>` : '';
   const ph = $('fin-parcela-hint');
@@ -1943,7 +1947,7 @@ ACTIONS.submitFinanca = async form => {
     try {
       if (t === 'fixo') {
         await Firebase.salvarFixo({ id: ed && ed.id, descricao, categoria, valor, desde: data.slice(0, 7), fonteId: FIN_FORM.fonte,
-          estimado: $('fin-estimado').checked });
+          estimado: $('fin-estimado').checked, dia: $('fin-dia') && !ehCredito(fontePorId(FIN_FORM.fonte)) ? $('fin-dia').value : '' });
       } else {
         await Firebase.salvarLancamento({ id: ed && ed.id, data, descricao, categoria, valor, nParcelas: n,
           parcelaSeguinte: t === 'parcelado' && !cartao && $('fin-seguinte').checked, fonteId: FIN_FORM.fonte });
@@ -3332,6 +3336,7 @@ function finResumo(ctx) {
         <div class="stat-tile"><div class="l">À vista</div><div class="v">${brl(porTipo('avista'))}</div></div>
       </div>
     </div>
+    ${P.porAno ? '' : fluxoSalarioHtml(fluxoDoSalario({ itens: itens.filter(visivel), fontes: fin.fontes, rendas: fin.rendas, mes, hoje: todayStr() }), mes, ctx)}
     ${avs.length ? `<div class="card"><h3>Atenção</h3>${avs.map(a => avisoHtml(a, mes)).join('')}</div>` : ''}
     ${beneficios.length ? `<div class="card"><h3>Benefícios</h3>${beneficios.map(f => {
       const usado = soma(itens.filter(i => P.noPeriodo(i) && i.pagouEu && i.fonteId === f.id)), disponivel = f.mensal * nMeses;
@@ -3366,6 +3371,36 @@ function finResumo(ctx) {
         <button class="link-btn" type="button" data-action="finNova" data-tipo="avista">+ Despesa pessoal</button></div>
       ${lista.length ? lista.map(i => itemHtml(i, ctx)).join('') : '<p class="empty">Nada neste mês.</p>'}
     </div>`}`;
+}
+/** Depósito a depósito: o que entrou, o que já saiu e o que ainda vai sair até a próxima renda cair. */
+function fluxoSalarioHtml(ciclos, mes, ctx) {
+  if (!ciclos.length) return '';
+  const dm = d => d.slice(8, 10) + '/' + d.slice(5, 7);
+  const vespera = d => { const x = new Date(d + 'T12:00:00'); x.setDate(x.getDate() - 1); return x.toISOString().slice(0, 10); };
+  return `<div class="card">
+    <h3>Salário, depósito a depósito</h3>
+    ${ciclos.map(c => {
+      const gasto = c.saiu + c.vaiSair, falta = c.sobra < 0;
+      const futuro = c.data > todayStr();
+      return `<div class="ciclo${c.atual ? ' atual' : ''}">
+        <div class="top"><span>${h(c.nomes.join(' + '))} <small>${futuro ? 'cai' : 'caiu'} ${dm(c.data)}</small>${c.atual ? ' <span class="pill">agora</span>' : ''}</span>
+          <span>${brl(c.valor)}</span></div>
+        <div class="trilho">${c.saiu ? `<span style="width:${Math.min(100, pctDe(c.saiu, c.valor))}%;background:${falta ? 'var(--critical)' : 'var(--brand-blue)'}"></span>` : ''}${c.vaiSair && !falta
+          ? `<span class="prev" style="width:${Math.min(100 - pctDe(c.saiu, c.valor), pctDe(c.vaiSair, c.valor))}%"></span>` : ''}</div>
+        <div class="linhas">
+          <span>De ${dm(c.data)} a ${dm(vespera(c.ate))}</span>
+          ${c.saiu ? `<span>Já saiu <b>${brl(c.saiu)}</b></span>` : ''}
+          ${c.vaiSair ? `<span>Ainda vai sair <b>${brl(c.vaiSair)}</b></span>` : ''}
+          <span class="${falta ? 'falta' : 'sobra'}">${falta ? 'Faltam' : c.data > todayStr() || c.vaiSair || c.atual ? 'Sobra' : 'Sobrou'} <b>${brl(Math.abs(c.sobra))}</b></span>
+        </div>
+        ${gasto ? `<details class="ciclo-itens"><summary>Ver o que sai deste depósito (${c.itens.length})</summary>
+          ${c.itens.map(i => `<div class="hist-item"><div class="top"><span>${h(i.descricao)}${i.saida > todayStr() ? ' <span class="pill est">previsto</span>' : ''}</span><span>${brl(i.valor)}</span></div>
+            <div class="sub">${dm(i.saida)} · ${h(deOndeTexto(i, ctx))} · ${h(tipoTexto(i))} ${pillFonte(i)}</div></div>`).join('')}
+        </details>` : ''}
+      </div>`;
+    }).join('')}
+    <p class="hint">Cada renda paga o que sai até a próxima cair: débito e Pix pela data; cartão de crédito no vencimento da fatura; contas fixas no dia do pagamento (sem dia, no primeiro depósito do mês). Conta a sua parte; benefícios ficam de fora.</p>
+  </div>`;
 }
 /** Ano todo: total de cada mês (toque num mês para abrir só ele). */
 function anoPorMesHtml(itens, P, mesAtual) {

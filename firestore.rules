@@ -80,11 +80,12 @@ service cloud.firestore {
     }
     function fixoOk(d) {
       return d.keys().hasOnly(['descricao', 'categoria', 'valor', 'desde', 'ate', 'valores', 'fonteId', 'estimado',
-               'confirmados', 'criadoEm', 'editadoEm'])
+               'confirmados', 'dia', 'criadoEm', 'editadoEm'])
         && str(d.descricao, 1, 80) && str(d.categoria, 1, 40) && centavos(d.valor) && mesISO(d.desde)
         && mesISO(d.get('ate', '2000-01')) && d.get('valores', []) is list && d.get('valores', []).size() <= 120
         && str(d.get('fonteId', ''), 0, 40) && d.get('estimado', false) is bool
-        && d.get('confirmados', {}) is map && d.get('confirmados', {}).size() <= 600 && carimbos(d);
+        && d.get('confirmados', {}) is map && d.get('confirmados', {}).size() <= 600
+        && dia(d.get('dia', 1)) && carimbos(d);
     }
     function rendaOk(d) {
       return d.keys().hasOnly(['descricao', 'valor', 'tipo', 'dia', 'mes', 'desde', 'ate', 'criadoEm', 'editadoEm'])

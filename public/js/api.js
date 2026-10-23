@@ -1186,9 +1186,12 @@ export const adiantarLancamento = (id, qtd) => tenta(async () => {
   await updateDoc(finDoc('lancamentos', id), { adiantamentos: lista, editadoEm: serverTimestamp() });
 });
 /** Conta fixa pessoal: repete todo mês a partir de `desde`. */
-export const salvarFixo = ({ id, descricao, categoria, valor, desde, fonteId, estimado }) => tenta(async () => {
+export const salvarFixo = ({ id, descricao, categoria, valor, desde, fonteId, estimado, dia }) => tenta(async () => {
   const campos = { descricao: textoOk(descricao, 80, 'Preencha a descrição.'), categoria: textoOk(categoria, 40, 'Escolha a categoria.'),
     valor: centavos(valor), desde: mesOk(desde) || mesHoje(), fonteId: String(fonteId || '').slice(0, 40), estimado: !!estimado };
+  // Dia do pagamento (opcional; contas antigas não têm): decide de qual depósito do salário a conta sai
+  if (diaOk(dia)) campos.dia = diaOk(dia);
+  else if (id && (FIN.fixos.find(x => x.id === id) || {}).dia) campos.dia = deleteField();
   return { id: await gravar('fixos', id, campos) };
 });
 const fixoPorId = id => { const f = FIN.fixos.find(x => x.id === id); if (!f) throw new ApiError('Conta fixa não encontrada.'); return f; };
